@@ -1,6 +1,6 @@
 [project]
 name = "docviewer"
-version = "1.0.0"
+version = "1.1.0"
 description = "A universal local web server for reading PDFs, EPUBs, and DOCX"
 readme = "README.md"
 requires-python = ">=3.9"

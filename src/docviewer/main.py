@@ -27,6 +27,9 @@ SUPPORTED_EXTS = {".pdf", ".epub", ".docx", ".odt", ".odf", ".md", ".txt"}
 
 app = FastAPI()
 
+# In-memory dictionary for temporary "Quick Views"
+TEMP_LIB = {}
+
 class PathRequest(BaseModel):
     path: str
 
@@ -38,6 +41,14 @@ def load_lib():
 
 def save_lib(lib_data):
     LIB_FILE.write_text(json.dumps(lib_data, indent=4))
+
+def get_doc_info(doc_id: str):
+    if doc_id in TEMP_LIB:
+        return TEMP_LIB[doc_id]
+    lib = load_lib()
+    if doc_id in lib:
+        return lib[doc_id]
+    return None
 
 # --- SETUP PDF.JS ---
 def ensure_pdfjs():
@@ -111,6 +122,21 @@ def index():
             if (response.ok) { alert(`Successfully added ${result.added} document(s)!`); window.location.reload(); }
             else { status.innerText = ` ❌ ${result.detail || 'Error'}`; }
         }
+        async function quickView() {
+            const pathInput = document.getElementById('quickPathInput').value;
+            const status = document.getElementById('quickStatus');
+            if (!pathInput) { status.innerText = " ⚠️ Enter a file path!"; return; }
+            status.innerText = " ⏳ Opening...";
+            const response = await fetch('/quick-view-path', {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: pathInput })
+            });
+            const result = await response.json();
+            if (response.ok) {
+                status.innerText = "";
+                window.open(`/view/${result.id}`, '_blank');
+            } else { status.innerText = ` ❌ ${result.detail || 'Error'}`; }
+        }
         async function deleteDoc(docId) {
             if (confirm("Delete this document from your library?")) {
                 const response = await fetch(`/delete/${docId}`, { method: "DELETE" });
@@ -130,9 +156,16 @@ def index():
         <hr style="width: 100%; border: 0; border-top: 1px solid var(--border); margin: 0;">
         <div class="input-group">
             <b>🔗 Link Local Path:</b>
-            <input type="text" id="pathInput" placeholder="e.g., /home/user/Books or C:\\Documents\\paper.pdf">
+            <input type="text" id="pathInput" placeholder="e.g., /home/user/Books or C:\\Docs\\paper.pdf">
             <button onclick="importPath()">Import Path</button>
             <span id="pathStatus" class="status"></span>
+        </div>
+        <hr style="width: 100%; border: 0; border-top: 1px solid var(--border); margin: 0;">
+        <div class="input-group">
+            <b>👀 Quick View (No Save):</b>
+            <input type="text" id="quickPathInput" placeholder="e.g., /home/user/Downloads/temp.epub">
+            <button onclick="quickView()">Quick View</button>
+            <span id="quickStatus" class="status"></span>
         </div>
     </div>
     <div>
@@ -194,6 +227,19 @@ def add_by_path(req: PathRequest):
     save_lib(lib)
     return {"status": "success", "added": added}
 
+@app.post("/quick-view-path")
+def quick_view_path(req: PathRequest):
+    p = Path(req.path).expanduser().resolve()
+    if not p.is_file():
+        raise HTTPException(status_code=400, detail="File does not exist.")
+    ext = p.suffix.lower()
+    if ext not in SUPPORTED_EXTS:
+        raise HTTPException(status_code=400, detail="Unsupported file format.")
+
+    doc_id = "tmp_" + str(uuid.uuid4())[:8]
+    TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext}
+    return {"status": "success", "id": doc_id}
+
 @app.delete("/delete/{doc_id}")
 def delete_doc(doc_id: str):
     lib = load_lib()
@@ -208,15 +254,13 @@ def delete_doc(doc_id: str):
 
 @app.get("/view/{doc_id}")
 def view_doc(doc_id: str):
-    lib = load_lib()
-    if doc_id not in lib:
-        return HTMLResponse("Document not found in library.", status_code=404)
+    doc = get_doc_info(doc_id)
+    if not doc:
+        return HTMLResponse("Document not found or temporary session expired.", status_code=404)
 
-    doc = lib[doc_id]
     ext = doc["ext"]
     file_path = doc["path"]
 
-    # Shared Dark Mode CSS for document viewers
     viewer_css = """
     :root { --bg: #ffffff; --txt: #111827; --code-bg: #f4f4f4; --border: #ddd; }
     @media (prefers-color-scheme: dark) { :root { --bg: #111827; --txt: #e2e8f0; --code-bg: #1e293b; --border: #334155; } }
@@ -275,9 +319,9 @@ def view_doc(doc_id: str):
 
 @app.get("/file/{doc_id}")
 def get_file(doc_id: str):
-    lib = load_lib()
-    if doc_id in lib:
-        return FileResponse(lib[doc_id]["path"])
+    doc = get_doc_info(doc_id)
+    if doc:
+        return FileResponse(doc["path"])
     return HTMLResponse("File missing", status_code=404)
 
 # --- CLI LOGIC ---
@@ -290,6 +334,10 @@ def cli():
 
     serve_parser = subparsers.add_parser("serve", help="Start the server")
     serve_parser.add_argument("--port", type=int, default=2005, help="Port to run on")
+
+    open_parser = subparsers.add_parser("open", help="Quick view a file without adding it to the library")
+    open_parser.add_argument("path", type=str, help="Path to the file to open temporarily")
+    open_parser.add_argument("--port", type=int, default=2005, help="Port to run on")
 
     args = parser.parse_args()
     APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -332,4 +380,28 @@ def cli():
         app.mount("/pdfjs", StaticFiles(directory=str(PDFJS_DIR)), name="pdfjs")
         print(f"[*] Starting WebReader on http://localhost:{args.port}")
         webbrowser.open(f"http://localhost:{args.port}")
+        uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+
+    elif args.command == "open":
+        p = Path(args.path).expanduser().resolve()
+        if not p.is_file():
+            print(f"[-] Error: File '{p}' does not exist.")
+            sys.exit(1)
+
+        ext = p.suffix.lower()
+        if ext not in SUPPORTED_EXTS:
+            print(f"[-] Unsupported format: {p.suffix}")
+            sys.exit(1)
+
+        # Load it into the temporary library
+        doc_id = "tmp_" + str(uuid.uuid4())[:8]
+        TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext}
+
+        ensure_pdfjs()
+        app.mount("/pdfjs", StaticFiles(directory=str(PDFJS_DIR)), name="pdfjs")
+        url = f"http://localhost:{args.port}/view/{doc_id}"
+
+        print(f"[*] Opening '{p.name}' in Quick View Mode...")
+        print(f"[*] Close the server (Ctrl+C) when finished reading.")
+        webbrowser.open(url)
         uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
