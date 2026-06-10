@@ -7,7 +7,9 @@ import zipfile
 import subprocess
 import webbrowser
 import shutil
+import sqlite3
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
@@ -19,7 +21,7 @@ import markdown
 
 # --- CONFIGURATION ---
 APP_DIR = Path.home() / ".docviewer"
-LIB_FILE = APP_DIR / "library.json"
+DB_FILE = APP_DIR / "library.db"
 PDFJS_DIR = APP_DIR / "pdfjs"
 UPLOAD_DIR = APP_DIR / "uploads"
 
@@ -32,23 +34,59 @@ TEMP_LIB = {}
 
 class PathRequest(BaseModel):
     path: str
+    parent: Optional[str] = None
+
+class MoveRequest(BaseModel):
+    doc_id: str
+    target_folder: Optional[str] = None
 
 # --- DATABASE LOGIC ---
-def load_lib():
-    if LIB_FILE.exists():
-        return json.loads(LIB_FILE.read_text())
-    return {}
+def get_db():
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def save_lib(lib_data):
-    LIB_FILE.write_text(json.dumps(lib_data, indent=4))
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT,
+                ext TEXT,
+                type TEXT NOT NULL, -- 'file' or 'folder'
+                parent TEXT,
+                FOREIGN KEY (parent) REFERENCES items (id) ON DELETE CASCADE
+            )
+        """)
+        # Ensure parents are NULL not empty string
+        conn.execute("UPDATE items SET parent = NULL WHERE parent = ''")
+        
+        # Migration from JSON if exists
+        LIB_FILE = APP_DIR / "library.json"
+        if LIB_FILE.exists():
+            try:
+                lib_data = json.loads(LIB_FILE.read_text())
+                for doc_id, doc in lib_data.items():
+                    # Normalize empty string parents to NULL
+                    p = doc.get("parent")
+                    if not p: p = None
+                    conn.execute(
+                        "INSERT OR IGNORE INTO items (id, name, path, ext, type, parent) VALUES (?, ?, ?, ?, ?, ?)",
+                        (doc_id, doc["name"], doc.get("path"), doc.get("ext"), doc.get("type", "file"), p)
+                    )
+                LIB_FILE.unlink()
+            except:
+                pass
+        conn.commit()
 
-def get_doc_info(doc_id: str):
-    if doc_id in TEMP_LIB:
-        return TEMP_LIB[doc_id]
-    lib = load_lib()
-    if doc_id in lib:
-        return lib[doc_id]
-    return None
+def get_item(doc_id: str):
+    if doc_id.startswith("tmp_"):
+        return TEMP_LIB.get(doc_id)
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (doc_id,)).fetchone()
+        return dict(row) if row else None
 
 # --- SETUP PDF.JS ---
 def ensure_pdfjs():
@@ -67,140 +105,464 @@ def ensure_pdfjs():
 
 # --- FASTAPI ROUTES ---
 @app.get("/")
-def index():
-    lib = load_lib()
+def index(folder: str = None):
+    # Normalize empty string to None for SQLite NULL comparisons
+    if folder == "": folder = None
+    
+    with get_db() as conn:
+        if folder:
+            parent_item = conn.execute("SELECT * FROM items WHERE id = ?", (folder,)).fetchone()
+            if not parent_item or parent_item["type"] != "folder":
+                folder = None
+        
+        items = conn.execute("SELECT * FROM items WHERE parent IS ?", (folder,)).fetchall()
+        all_folders = conn.execute("SELECT id, name FROM items WHERE type = 'folder'").fetchall()
+    
+    sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["name"].lower()))
 
-    html = """
+    breadcrumbs = []
+    curr = folder
+    with get_db() as conn:
+        while curr:
+            item = conn.execute("SELECT name, parent FROM items WHERE id = ?", (curr,)).fetchone()
+            if item:
+                breadcrumbs.append(f"<a href='/?folder={curr}'>{item['name']}</a>")
+                curr = item['parent']
+            else:
+                curr = None
+    breadcrumbs.append("<a href='/'>Library</a>")
+    breadcrumbs.reverse()
+    breadcrumb_html = " <span class='sep'>/</span> ".join(breadcrumbs)
+
+    folder_options = "".join([f"<option value='{f['id']}'>{f['name']}</option>" for f in all_folders if f['id'] != folder])
+
+    html = f"""
     <!DOCTYPE html>
-    <html><head><title>My Library</title>
-    <style>
-        :root {
-            --bg: #ffffff; --txt: #111827; --box: #f0f4f8; --border: #cbd5e1;
-            --link: #0066cc; --btn: #ffffff; --btn-hover: #f8fafc; --ext: #e2e8f0;
-        }
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #111827; --txt: #e2e8f0; --box: #1e293b; --border: #334155;
-                --link: #60a5fa; --btn: #1e293b; --btn-hover: #334155; --ext: #334155;
-            }
-        }
-        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background-color: var(--bg); color: var(--txt); }
-        .upload-box { padding: 20px; background: var(--box); border-radius: 8px; margin-bottom: 2rem; border: 2px dashed var(--border); display: flex; flex-direction: column; gap: 15px; }
-        .input-group { display: flex; align-items: center; gap: 10px; }
-        .doc-item { padding: 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-        a { text-decoration: none; color: var(--link); font-weight: bold; font-size: 1.1em; }
-        a:hover { text-decoration: underline; }
-        .ext { color: var(--txt); font-size: 0.8em; text-transform: uppercase; background: var(--ext); padding: 2px 6px; border-radius: 4px; }
-        .del-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.2em; margin-left: 10px; }
-        .del-btn:hover { color: #dc2626; transform: scale(1.1); }
-        button { padding: 6px 12px; cursor: pointer; border-radius: 4px; border: 1px solid var(--border); background: var(--btn); color: var(--txt); }
-        button:hover { background: var(--btn-hover); }
-        input[type="text"], input[type="file"] { padding: 6px; border: 1px solid var(--border); border-radius: 4px; flex-grow: 1; background: var(--btn); color: var(--txt); }
-        .status { font-weight: bold; margin-left: 10px; }
-    </style>
-    <script>
-        async function uploadFile() {
-            const fileInput = document.getElementById('fileInput');
-            const status = document.getElementById('uploadStatus');
-            if (!fileInput.files[0]) { status.innerText = " ⚠️ Select a file!"; return; }
-            status.innerText = " ⏳ Uploading...";
-            const formData = new FormData();
-            formData.append("file", fileInput.files[0]);
-            const response = await fetch('/upload', { method: "POST", body: formData });
-            if (response.ok) { window.location.reload(); } else { status.innerText = " ❌ Upload failed."; }
-        }
-        async function importPath() {
-            const pathInput = document.getElementById('pathInput').value;
-            const status = document.getElementById('pathStatus');
-            if (!pathInput) { status.innerText = " ⚠️ Enter a path!"; return; }
-            status.innerText = " ⏳ Scanning...";
-            const response = await fetch('/add-path', {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: pathInput })
-            });
-            const result = await response.json();
-            if (response.ok) { alert(`Successfully added ${result.added} document(s)!`); window.location.reload(); }
-            else { status.innerText = ` ❌ ${result.detail || 'Error'}`; }
-        }
-        async function quickView() {
-            const pathInput = document.getElementById('quickPathInput').value;
-            const status = document.getElementById('quickStatus');
-            if (!pathInput) { status.innerText = " ⚠️ Enter a file path!"; return; }
-            status.innerText = " ⏳ Opening...";
-            const response = await fetch('/quick-view-path', {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: pathInput })
-            });
-            const result = await response.json();
-            if (response.ok) {
-                status.innerText = "";
-                window.open(`/view/${result.id}`, '_blank');
-            } else { status.innerText = ` ❌ ${result.detail || 'Error'}`; }
-        }
-        async function deleteDoc(docId) {
-            if (confirm("Delete this document from your library?")) {
-                const response = await fetch(`/delete/${docId}`, { method: "DELETE" });
-                if (response.ok) { window.location.reload(); }
-            }
-        }
-    </script>
-    </head><body>
-    <h1>📚 My Document Library</h1>
-    <div class="upload-box">
-        <div class="input-group">
-            <b>📁 Upload a Copy:</b>
-            <input type="file" id="fileInput" accept=".pdf,.epub,.docx,.odt,.odf,.md,.txt">
-            <button onclick="uploadFile()">Upload</button>
-            <span id="uploadStatus" class="status"></span>
-        </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid var(--border); margin: 0;">
-        <div class="input-group">
-            <b>🔗 Link Local Path:</b>
-            <input type="text" id="pathInput" placeholder="e.g., /home/user/Books or C:\\Docs\\paper.pdf">
-            <button onclick="importPath()">Import Path</button>
-            <span id="pathStatus" class="status"></span>
-        </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid var(--border); margin: 0;">
-        <div class="input-group">
-            <b>👀 Quick View (No Save):</b>
-            <input type="text" id="quickPathInput" placeholder="e.g., /home/user/Downloads/temp.epub">
-            <button onclick="quickView()">Quick View</button>
-            <span id="quickStatus" class="status"></span>
-        </div>
-    </div>
-    <div>
-    """
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DocViewer</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+        <style>
+            :root {{
+                --bg: #fdfdfc;
+                --sidebar-bg: #f5f5f3;
+                --text-main: #1a1a1a;
+                --text-muted: #666;
+                --accent: #2a2a2a;
+                --border: #e8e8e6;
+                --card-bg: #ffffff;
+                --folder-icon: #d4a373;
+                --hover: #fafafa;
+                --link: #000;
+            }}
 
-    if not lib:
-        html += "<p>Your library is empty. Add a file above!</p>"
-    else:
-        for doc_id, doc in lib.items():
-            html += f"""
-            <div class='doc-item'>
-                <a href='/view/{doc_id}' target='_blank'>📄 {doc['name']}</a>
-                <div>
-                    <span class='ext'>{doc['ext'].replace('.','')}</span>
-                    <button class='del-btn' onclick="deleteDoc('{doc_id}')" title="Delete">🗑️</button>
+            @media (prefers-color-scheme: dark) {{
+                :root {{
+                    --bg: #121212;
+                    --sidebar-bg: #1a1a1a;
+                    --text-main: #e0e0e0;
+                    --text-muted: #888;
+                    --accent: #ffffff;
+                    --border: #2a2a2a;
+                    --card-bg: #1e1e1e;
+                    --folder-icon: #c29a6a;
+                    --hover: #222222;
+                    --link: #fff;
+                }}
+            }}
+
+            * {{ box-sizing: border-box; }}
+            body {{
+                font-family: 'Instrument Sans', sans-serif;
+                background-color: var(--bg);
+                color: var(--text-main);
+                margin: 0;
+                display: flex;
+                height: 100vh;
+                overflow: hidden;
+            }}
+
+            aside {{
+                width: 300px;
+                background-color: var(--sidebar-bg);
+                border-right: 1px solid var(--border);
+                padding: 40px 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 32px;
+                overflow-y: auto;
+            }}
+
+            h1 {{
+                font-size: 22px;
+                font-weight: 600;
+                margin: 0;
+                letter-spacing: -0.02em;
+            }}
+
+            .sidebar-section {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }}
+
+            .section-label {{
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                color: var(--text-muted);
+                font-weight: 600;
+            }}
+
+            .input-group {{
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }}
+
+            input[type="text"], input[type="file"], select {{
+                padding: 10px 12px;
+                border-radius: 6px;
+                border: 1px solid var(--border);
+                background: var(--card-bg);
+                color: var(--text-main);
+                font-family: inherit;
+                font-size: 14px;
+                width: 100%;
+                outline: none;
+            }}
+
+            button {{
+                padding: 10px 16px;
+                border-radius: 6px;
+                border: none;
+                background: var(--accent);
+                color: var(--bg);
+                font-weight: 600;
+                cursor: pointer;
+                transition: opacity 0.2s;
+                font-size: 14px;
+            }}
+
+            button:hover {{ opacity: 0.9; }}
+            button.secondary {{ background: transparent; color: var(--text-main); border: 1px solid var(--border); }}
+
+            main {{
+                flex: 1;
+                padding: 40px 60px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 32px;
+            }}
+
+            .breadcrumbs {{
+                font-size: 15px;
+                font-weight: 500;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+
+            .breadcrumbs a {{
+                color: var(--text-muted);
+                text-decoration: none;
+                transition: color 0.2s;
+            }}
+
+            .breadcrumbs a:hover {{ color: var(--text-main); }}
+            .breadcrumbs .sep {{ color: var(--border); }}
+            .breadcrumbs a:last-child {{ color: var(--text-main); pointer-events: none; }}
+
+            .grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+                gap: 20px;
+            }}
+
+            .item-card {{
+                background: var(--card-bg);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 16px;
+                display: flex;
+                flex-direction: column;
+                gap: 14px;
+                transition: transform 0.2s, box-shadow 0.2s;
+                position: relative;
+            }}
+
+            .item-card:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 8px 16px rgba(0,0,0,0.04);
+            }}
+
+            .item-info {{
+                display: flex;
+                align-items: flex-start;
+                gap: 12px;
+            }}
+
+            .item-icon {{
+                font-size: 20px;
+                line-height: 1;
+                color: var(--folder-icon);
+            }}
+
+            .item-name {{
+                font-size: 15px;
+                font-weight: 600;
+                color: var(--link);
+                text-decoration: none;
+                line-height: 1.4;
+                word-break: break-all;
+            }}
+
+            .item-name:hover {{ text-decoration: underline; }}
+
+            .item-meta {{
+                font-size: 12px;
+                color: var(--text-muted);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+
+            .ext-pill {{
+                background: var(--sidebar-bg);
+                padding: 2px 6px;
+                border-radius: 4px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }}
+
+            .item-actions {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: auto;
+                border-top: 1px solid var(--border);
+                padding-top: 10px;
+            }}
+
+            .action-btn {{
+                background: none;
+                border: none;
+                cursor: pointer;
+                padding: 6px;
+                border-radius: 4px;
+                color: var(--text-muted);
+                transition: background 0.2s, color 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+
+            .action-btn:hover {{ background: var(--hover); color: var(--text-main); }}
+            .action-btn.delete:hover {{ color: #e5484d; background: #fee2e2; }}
+
+            .move-wrapper {{ flex: 1; }}
+            .move-wrapper select {{
+                font-size: 11px;
+                padding: 4px 8px;
+                height: 28px;
+            }}
+
+            .empty-state {{
+                text-align: center;
+                padding: 100px 0;
+                color: var(--text-muted);
+            }}
+
+            ::-webkit-scrollbar {{ width: 8px; }}
+            ::-webkit-scrollbar-track {{ background: transparent; }}
+            ::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 10px; }}
+            ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
+
+        </style>
+        <script>
+            const currentFolder = "{folder or ''}";
+            
+            async function uploadFile() {{
+                const fileInput = document.getElementById('fileInput');
+                if (!fileInput.files[0]) return;
+                const formData = new FormData();
+                formData.append("file", fileInput.files[0]);
+                const url = currentFolder ? `/upload?folder=${{currentFolder}}` : '/upload';
+                const response = await fetch(url, {{ method: "POST", body: formData }});
+                if (response.ok) window.location.reload();
+            }}
+
+            async function importPath() {{
+                const pathInput = document.getElementById('pathInput').value;
+                if (!pathInput) return;
+                const response = await fetch('/add-path', {{
+                    method: "POST", headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ path: pathInput, parent: currentFolder || null }})
+                }});
+                if (response.ok) window.location.reload();
+            }}
+
+            async function createFolder() {{
+                const name = prompt("Folder name:");
+                if (!name) return;
+                const response = await fetch('/create-folder', {{
+                    method: "POST", headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ name: name, parent: currentFolder || null }})
+                }});
+                if (response.ok) window.location.reload();
+            }}
+
+            async function moveItem(docId, targetFolder) {{
+                if (!targetFolder) return;
+                const response = await fetch('/move-item', {{
+                    method: "POST", headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ doc_id: docId, target_folder: targetFolder === 'root' ? null : targetFolder }})
+                }});
+                if (response.ok) window.location.reload();
+                else {{
+                    const result = await response.json();
+                    alert(`Error: ${{result.detail}}`);
+                }}
+            }}
+
+            async function deleteItem(docId, name, isFolder) {{
+                const msg = isFolder ? `Delete folder "${{name}}" and all its contents?` : `Delete "${{name}}"?`;
+                if (confirm(msg)) {{
+                    const response = await fetch(`/delete/${{docId}}`, {{ method: "DELETE" }});
+                    if (response.ok) window.location.reload();
+                    else alert("Failed to delete item.");
+                }}
+            }}
+
+            async function openExplorer(docId) {{
+                await fetch(`/open-explorer/${{docId}}`, {{ method: "POST" }});
+            }}
+
+            async function quickView() {{
+                const pathInput = document.getElementById('quickPathInput').value;
+                if (!pathInput) return;
+                const response = await fetch('/quick-view-path', {{
+                    method: "POST", headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ path: pathInput }})
+                }});
+                const result = await response.json();
+                if (response.ok) window.open(`/view/${{result.id}}`, '_blank');
+            }}
+        </script>
+    </head>
+    <body>
+        <aside>
+            <h1>DocViewer</h1>
+            
+            <div class="sidebar-section">
+                <span class="section-label">Management</span>
+                <button onclick="createFolder()">+ New Folder</button>
+            </div>
+
+            <div class="sidebar-section">
+                <span class="section-label">Upload Local File</span>
+                <div class="input-group">
+                    <input type="file" id="fileInput" onchange="uploadFile()">
                 </div>
             </div>
-            """
 
-    html += "</div></body></html>"
+            <div class="sidebar-section">
+                <span class="section-label">Link Directory or File</span>
+                <div class="input-group">
+                    <input type="text" id="pathInput" placeholder="Enter local path...">
+                    <button class="secondary" onclick="importPath()">Link Path</button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <span class="section-label">Quick View</span>
+                <div class="input-group">
+                    <input type="text" id="quickPathInput" placeholder="No-save view path...">
+                    <button class="secondary" onclick="quickView()">Open</button>
+                </div>
+            </div>
+        </aside>
+
+        <main>
+            <div class="breadcrumbs">{breadcrumb_html}</div>
+            
+            <div class="grid">
+    """
+
+    if not sorted_items:
+        html += """
+            </div>
+            <div class="empty-state">
+                <p>No documents found here.</p>
+            </div>
+        """
+    else:
+        for doc in sorted_items:
+            doc_id = doc["id"]
+            is_folder = doc["type"] == "folder"
+            icon = "📁" if is_folder else "📄"
+            link = f"/?folder={doc_id}" if is_folder else f"/view/{doc_id}"
+            target = "" if is_folder else "target='_blank'"
+            explorer_btn = f'<button class="action-btn" onclick="openExplorer(\'{doc_id}\')" title="Show in Explorer">📂</button>' if doc["path"] else ""
+            
+            move_options = f"<option value=''>Move...</option><option value='root'>Library Root</option>{folder_options}"
+            move_dropdown = f"<select onchange='moveItem(\"{doc_id}\", this.value)'>{move_options}</select>"
+
+            meta = f"<span class='ext-pill'>{doc['ext'].replace('.','')}</span>" if not is_folder and doc['ext'] else "Folder"
+            # Escape single quotes for JS
+            safe_name = doc['name'].replace("'", "\\'")
+            
+            html += f"""
+                <div class="item-card">
+                    <div class="item-info">
+                        <span class="item-icon">{icon}</span>
+                        <div style="flex: 1;">
+                            <a href="{link}" {target} class="item-name">{doc['name']}</a>
+                            <div class="item-meta">{meta}</div>
+                        </div>
+                    </div>
+                    <div class="item-actions">
+                        <div class="move-wrapper">
+                            {move_dropdown}
+                        </div>
+                        {explorer_btn}
+                        <button class="action-btn delete" onclick="deleteItem('{doc_id}', '{safe_name}', {str(is_folder).lower()})" title="Delete">🗑️</button>
+                    </div>
+                </div>
+            """
+        html += "</div>"
+
+    html += """
+        </main>
+    </body>
+    </html>
+    """
     return HTMLResponse(html)
 
 @app.post("/upload")
-def upload_file(file: UploadFile = File(...)):
+def upload_file(file: UploadFile = File(...), folder: str = None):
+    # Normalize empty string to None
+    if not folder: folder = None
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename).suffix.lower()
     if ext not in SUPPORTED_EXTS:
         return HTMLResponse("Unsupported file format.", status_code=400)
-    lib = load_lib()
     doc_id = str(uuid.uuid4())[:8]
     file_path = UPLOAD_DIR / f"{doc_id}{ext}"
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    lib[doc_id] = {"name": file.filename, "path": str(file_path), "ext": ext}
-    save_lib(lib)
+    
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO items (id, name, path, ext, type, parent) VALUES (?, ?, ?, ?, ?, ?)",
+            (doc_id, file.filename, str(file_path), ext, "file", folder)
+        )
+        conn.commit()
     return {"status": "success", "id": doc_id}
 
 @app.post("/add-path")
@@ -208,24 +570,76 @@ def add_by_path(req: PathRequest):
     p = Path(req.path).expanduser().resolve()
     if not p.exists():
         raise HTTPException(status_code=400, detail="Path does not exist.")
-    lib = load_lib()
+    
+    # Normalize parent ID
+    parent_id = req.parent if req.parent else None
+    
     added = 0
-    def add_file(file_path):
-        ext = file_path.suffix.lower()
-        if ext in SUPPORTED_EXTS:
+    with get_db() as conn:
+        def add_item(path, pid=None):
+            nonlocal added
             doc_id = str(uuid.uuid4())[:8]
-            lib[doc_id] = {"name": file_path.name, "path": str(file_path), "ext": ext}
-            return True
-        return False
-    if p.is_file():
-        if add_file(p):
-            added += 1
-    elif p.is_dir():
-        for f in p.rglob("*"):
-            if f.is_file() and add_file(f):
+            if path.is_file():
+                ext = path.suffix.lower()
+                if ext in SUPPORTED_EXTS:
+                    conn.execute(
+                        "INSERT INTO items (id, name, path, ext, type, parent) VALUES (?, ?, ?, ?, ?, ?)",
+                        (doc_id, path.name, str(path), ext, "file", pid)
+                    )
+                    added += 1
+                    return doc_id
+            elif path.is_dir():
+                conn.execute(
+                    "INSERT INTO items (id, name, path, type, parent) VALUES (?, ?, ?, ?, ?)",
+                    (doc_id, path.name, str(path), "folder", pid)
+                )
                 added += 1
-    save_lib(lib)
+                try:
+                    for item in sorted(path.iterdir()):
+                        add_item(item, doc_id)
+                except PermissionError:
+                    pass
+                return doc_id
+            return None
+
+        add_item(p, parent_id)
+        conn.commit()
     return {"status": "success", "added": added}
+
+@app.post("/move-item")
+def move_item(req: MoveRequest):
+    # Normalize target folder ID
+    target = req.target_folder if req.target_folder else None
+    with get_db() as conn:
+        if target:
+            if target == req.doc_id:
+                raise HTTPException(status_code=400, detail="Cannot move folder into itself.")
+            
+            curr = target
+            while curr:
+                row = conn.execute("SELECT parent FROM items WHERE id = ?", (curr,)).fetchone()
+                if not row: break
+                if row["parent"] == req.doc_id:
+                     raise HTTPException(status_code=400, detail="Cannot move folder into its own subfolder.")
+                curr = row["parent"]
+
+        conn.execute("UPDATE items SET parent = ? WHERE id = ?", (target, req.doc_id))
+        conn.commit()
+    return {"status": "success"}
+
+@app.post("/create-folder")
+def create_folder(req: dict):
+    name = req.get("name", "New Folder")
+    # Normalize parent ID
+    parent = req.get("parent") if req.get("parent") else None
+    doc_id = str(uuid.uuid4())[:8]
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO items (id, name, type, parent) VALUES (?, ?, ?, ?)",
+            (doc_id, name, "folder", parent)
+        )
+        conn.commit()
+    return {"status": "success", "id": doc_id}
 
 @app.post("/quick-view-path")
 def quick_view_path(req: PathRequest):
@@ -237,24 +651,62 @@ def quick_view_path(req: PathRequest):
         raise HTTPException(status_code=400, detail="Unsupported file format.")
 
     doc_id = "tmp_" + str(uuid.uuid4())[:8]
-    TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext}
+    TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext, "type": "file"}
     return {"status": "success", "id": doc_id}
 
 @app.delete("/delete/{doc_id}")
 def delete_doc(doc_id: str):
-    lib = load_lib()
-    if doc_id in lib:
-        doc_path = Path(lib[doc_id]["path"])
-        if UPLOAD_DIR in doc_path.parents and doc_path.exists():
-            doc_path.unlink()
-        del lib[doc_id]
-        save_lib(lib)
-        return {"status": "success"}
-    return HTMLResponse("Document not found.", status_code=404)
+    item = get_item(doc_id)
+    if not item:
+        return HTMLResponse("Item not found.", status_code=404)
+    
+    with get_db() as conn:
+        to_delete = [doc_id]
+        def find_children(pid):
+            children = conn.execute("SELECT id, type FROM items WHERE parent = ?", (pid,)).fetchall()
+            for child in children:
+                to_delete.append(child["id"])
+                if child["type"] == "folder":
+                    find_children(child["id"])
+        
+        if item["type"] == "folder":
+            find_children(doc_id)
+        
+        for d_id in to_delete:
+            d_item = conn.execute("SELECT path FROM items WHERE id = ?", (d_id,)).fetchone()
+            if d_item and d_item["path"]:
+                doc_path = Path(d_item["path"])
+                if UPLOAD_DIR in doc_path.parents and doc_path.exists():
+                    doc_path.unlink()
+            conn.execute("DELETE FROM items WHERE id = ?", (d_id,))
+        conn.commit()
+    
+    return {"status": "success"}
+
+@app.post("/open-explorer/{doc_id}")
+def open_explorer(doc_id: str):
+    doc = get_item(doc_id)
+    if not doc or not doc.get("path"):
+        raise HTTPException(status_code=404, detail="Path not found for this item.")
+    
+    p = Path(doc["path"]).resolve()
+    if not p.exists():
+         raise HTTPException(status_code=404, detail="Item no longer exists on disk.")
+    
+    if sys.platform == "win32":
+        subprocess.run(["explorer", "/select,", str(p)])
+    elif sys.platform == "darwin":
+        subprocess.run(["open", "-R", str(p)])
+    else:
+        try:
+            subprocess.run(["xdg-open", str(p.parent if p.is_file() else p)])
+        except:
+            pass
+    return {"status": "success"}
 
 @app.get("/view/{doc_id}")
 def view_doc(doc_id: str):
-    doc = get_doc_info(doc_id)
+    doc = get_item(doc_id)
     if not doc:
         return HTMLResponse("Document not found or temporary session expired.", status_code=404)
 
@@ -319,8 +771,8 @@ def view_doc(doc_id: str):
 
 @app.get("/file/{doc_id}")
 def get_file(doc_id: str):
-    doc = get_doc_info(doc_id)
-    if doc:
+    doc = get_item(doc_id)
+    if doc and doc.get("path"):
         return FileResponse(doc["path"])
     return HTMLResponse("File missing", status_code=404)
 
@@ -341,6 +793,7 @@ def cli():
 
     args = parser.parse_args()
     APP_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
 
     if args.command == "add":
         p = Path(args.path).resolve()
@@ -348,32 +801,39 @@ def cli():
             print(f"[-] Error: Path '{p}' does not exist.")
             sys.exit(1)
 
-        lib = load_lib()
         added = 0
-
-        def add_file(file_path):
-            ext = file_path.suffix.lower()
-            if ext in SUPPORTED_EXTS:
+        with get_db() as conn:
+            def add_item(path, parent_id=None):
+                nonlocal added
                 doc_id = str(uuid.uuid4())[:8]
-                lib[doc_id] = {"name": file_path.name, "path": str(file_path), "ext": ext}
-                return True
-            return False
-
-        if p.is_file():
-            if add_file(p):
-                added += 1
-                print(f"[+] Added '{p.name}'")
-            else:
-                print(f"[-] Unsupported format: {p.suffix}")
-        elif p.is_dir():
-            print(f"[*] Scanning folder '{p.name}' for supported documents...")
-            for f in p.rglob("*"):
-                if f.is_file() and add_file(f):
+                if path.is_file():
+                    ext = path.suffix.lower()
+                    if ext in SUPPORTED_EXTS:
+                        conn.execute(
+                            "INSERT INTO items (id, name, path, ext, type, parent) VALUES (?, ?, ?, ?, ?, ?)",
+                            (doc_id, path.name, str(path), ext, "file", parent_id)
+                        )
+                        added += 1
+                        print(f"  -> Added file: {path.name}")
+                        return doc_id
+                elif path.is_dir():
+                    conn.execute(
+                        "INSERT INTO items (id, name, path, type, parent) VALUES (?, ?, ?, ?, ?)",
+                        (doc_id, path.name, str(path), "folder", parent_id)
+                    )
                     added += 1
-                    print(f"  -> Added '{f.name}'")
+                    print(f"  -> Added folder: {path.name}")
+                    try:
+                        for item in sorted(path.iterdir()):
+                            add_item(item, doc_id)
+                    except PermissionError:
+                        pass
+                    return doc_id
+                return None
 
-        save_lib(lib)
-        print(f"[+] Successfully added {added} document(s) to your library!")
+            add_item(p)
+            conn.commit()
+        print(f"[+] Successfully added {added} item(s) to your library!")
 
     elif args.command == "serve":
         ensure_pdfjs()
@@ -395,7 +855,7 @@ def cli():
 
         # Load it into the temporary library
         doc_id = "tmp_" + str(uuid.uuid4())[:8]
-        TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext}
+        TEMP_LIB[doc_id] = {"name": p.name + " (Temp View)", "path": str(p), "ext": ext, "type": "file"}
 
         ensure_pdfjs()
         app.mount("/pdfjs", StaticFiles(directory=str(PDFJS_DIR)), name="pdfjs")
