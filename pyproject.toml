@@ -1,6 +1,6 @@
 [project]
 name = "docviewer"
-version = "1.8.0"
+version = "3.1.2"
 description = "A universal local web server for reading PDFs, EPUBs, and DOCX"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -9,7 +9,8 @@ dependencies = [
     "uvicorn>=0.29.0",
     "mammoth>=1.7.0",
     "python-multipart>=0.0.9",
-    "markdown>=3.5.0"
+    "markdown>=3.5.0",
+    "pymupdf>=1.23.0"
 ]
 
 [project.scripts]
@@ -18,3 +19,4 @@ docviewer = "docviewer.main:cli"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
