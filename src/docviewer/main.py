@@ -105,7 +105,7 @@ def ensure_pdfjs():
 
 # --- FASTAPI ROUTES ---
 @app.get("/")
-def index(folder: str = None):
+def index(folder: str = None, sort: str = "name_asc", view: str = "grid"):
     # Normalize empty string to None for SQLite NULL comparisons
     if folder == "": folder = None
     
@@ -118,7 +118,15 @@ def index(folder: str = None):
         items = conn.execute("SELECT * FROM items WHERE parent IS ?", (folder,)).fetchall()
         all_folders = conn.execute("SELECT id, name FROM items WHERE type = 'folder'").fetchall()
     
-    sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["name"].lower()))
+    # Sorting logic
+    if sort == "name_desc":
+        sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["name"].lower()), reverse=True)
+    elif sort == "type_asc":
+        sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["ext"] or "", x["name"].lower()))
+    elif sort == "type_desc":
+        sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["ext"] or "", x["name"].lower()), reverse=True)
+    else: # name_asc
+        sorted_items = sorted(items, key=lambda x: (x["type"] != "folder", x["name"].lower()))
 
     breadcrumbs = []
     curr = folder
@@ -126,17 +134,17 @@ def index(folder: str = None):
         while curr:
             item = conn.execute("SELECT name, parent FROM items WHERE id = ?", (curr,)).fetchone()
             if item:
-                breadcrumbs.append(f"<a href='/?folder={curr}'>{item['name']}</a>")
+                breadcrumbs.append(f"<a href='/?folder={curr}&sort={sort}&view={view}'>{item['name']}</a>")
                 curr = item['parent']
             else:
                 curr = None
-    breadcrumbs.append("<a href='/'>Library</a>")
+    breadcrumbs.append(f"<a href='/?sort={sort}&view={view}'>Library</a>")
     breadcrumbs.reverse()
     breadcrumb_html = " <span class='sep'>/</span> ".join(breadcrumbs)
 
     folder_options = "".join([f"<option value='{f['id']}'>{f['name']}</option>" for f in all_folders if f['id'] != folder])
 
-    html = f"""
+    html = f'''
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -145,40 +153,52 @@ def index(folder: str = None):
         <title>DocViewer</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <style>
             :root {{
-                --bg: #fdfdfc;
-                --sidebar-bg: #f5f5f3;
-                --text-main: #1a1a1a;
-                --text-muted: #666;
-                --accent: #2a2a2a;
-                --border: #e8e8e6;
-                --card-bg: #ffffff;
-                --folder-icon: #d4a373;
-                --hover: #fafafa;
-                --link: #000;
+                --bg: #f3f4f6;
+                --sidebar-bg: rgba(255, 255, 255, 0.7);
+                --text-main: #1f2937;
+                --text-muted: #6b7280;
+                --accent: #6366f1;
+                --accent-hover: #4f46e5;
+                --border: rgba(229, 231, 235, 0.5);
+                --card-bg: rgba(255, 255, 255, 0.8);
+                --card-hover: rgba(255, 255, 255, 1);
+                --folder-icon: #f59e0b;
+                --hover: rgba(243, 244, 246, 0.8);
+                --link: #111827;
+                --glass-border: 1px solid rgba(255, 255, 255, 0.3);
+                --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
             }}
 
             @media (prefers-color-scheme: dark) {{
                 :root {{
-                    --bg: #121212;
-                    --sidebar-bg: #1a1a1a;
-                    --text-main: #e0e0e0;
-                    --text-muted: #888;
-                    --accent: #ffffff;
-                    --border: #2a2a2a;
-                    --card-bg: #1e1e1e;
-                    --folder-icon: #c29a6a;
-                    --hover: #222222;
-                    --link: #fff;
+                    --bg: #0f172a;
+                    --sidebar-bg: rgba(30, 41, 59, 0.7);
+                    --text-main: #f1f5f9;
+                    --text-muted: #94a3b8;
+                    --accent: #818cf8;
+                    --accent-hover: #6366f1;
+                    --border: rgba(51, 65, 85, 0.5);
+                    --card-bg: rgba(30, 41, 59, 0.6);
+                    --card-hover: rgba(30, 41, 59, 0.9);
+                    --folder-icon: #fbbf24;
+                    --hover: rgba(51, 65, 85, 0.8);
+                    --link: #f8fafc;
+                    --glass-border: 1px solid rgba(255, 255, 255, 0.05);
+                    --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
                 }}
             }}
 
             * {{ box-sizing: border-box; }}
             body {{
-                font-family: 'Instrument Sans', sans-serif;
+                font-family: 'Outfit', sans-serif;
                 background-color: var(--bg);
+                background-image: 
+                    radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                    radial-gradient(at 50% 0%, hsla(225,39%,30%,0.2) 0, transparent 50%), 
+                    radial-gradient(at 100% 0%, hsla(339,49%,30%,0.2) 0, transparent 50%);
                 color: var(--text-main);
                 margin: 0;
                 display: flex;
@@ -186,47 +206,93 @@ def index(folder: str = None):
                 overflow: hidden;
             }}
 
+            @media (prefers-color-scheme: light) {{
+                body {{
+                    background-image: 
+                        radial-gradient(at 0% 0%, hsla(253,100%,96%,1) 0, transparent 50%), 
+                        radial-gradient(at 50% 0%, hsla(225,100%,94%,0.8) 0, transparent 50%), 
+                        radial-gradient(at 100% 0%, hsla(339,100%,94%,0.8) 0, transparent 50%);
+                }}
+            }}
+
             aside {{
-                width: 300px;
+                width: 320px;
                 background-color: var(--sidebar-bg);
-                border-right: 1px solid var(--border);
-                padding: 40px 24px;
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+                border-right: var(--glass-border);
+                padding: 40px 28px;
                 display: flex;
                 flex-direction: column;
-                gap: 32px;
+                gap: 36px;
                 overflow-y: auto;
+                box-shadow: 4px 0 24px rgba(0,0,0,0.02);
+                z-index: 10;
+            }}
+
+            .logo-container {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }}
+
+            .logo-icon {{
+                background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+                color: white;
+                width: 36px;
+                height: 36px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 18px;
+                box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
             }}
 
             h1 {{
-                font-size: 22px;
-                font-weight: 600;
+                font-size: 24px;
+                font-weight: 700;
                 margin: 0;
-                letter-spacing: -0.02em;
+                letter-spacing: -0.03em;
+                background: linear-gradient(to right, var(--text-main), var(--text-muted));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
             }}
 
             .sidebar-section {{
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 14px;
             }}
 
             .section-label {{
                 font-size: 11px;
                 text-transform: uppercase;
-                letter-spacing: 0.1em;
+                letter-spacing: 0.15em;
                 color: var(--text-muted);
-                font-weight: 600;
+                font-weight: 700;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+            
+            .section-label::after {{
+                content: "";
+                flex: 1;
+                height: 1px;
+                background: var(--border);
             }}
 
             .input-group {{
                 display: flex;
                 flex-direction: column;
-                gap: 8px;
+                gap: 10px;
             }}
 
             input[type="text"], input[type="file"], select {{
-                padding: 10px 12px;
-                border-radius: 6px;
+                padding: 12px 14px;
+                border-radius: 8px;
                 border: 1px solid var(--border);
                 background: var(--card-bg);
                 color: var(--text-main);
@@ -234,22 +300,70 @@ def index(folder: str = None):
                 font-size: 14px;
                 width: 100%;
                 outline: none;
+                transition: all 0.2s ease;
+                box-shadow: inset 0 2px 4px rgba(0,0,0,0.01);
+            }}
+
+            input[type="text"]:focus, select:focus {{
+                border-color: var(--accent);
+                box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+            }}
+
+            input[type="file"]::file-selector-button {{
+                border: none;
+                background: var(--accent);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 6px;
+                cursor: pointer;
+                margin-right: 12px;
+                font-family: inherit;
+                font-weight: 500;
+                font-size: 13px;
+                transition: background 0.2s;
+            }}
+
+            input[type="file"]::file-selector-button:hover {{
+                background: var(--accent-hover);
             }}
 
             button {{
-                padding: 10px 16px;
-                border-radius: 6px;
+                padding: 12px 16px;
+                border-radius: 8px;
                 border: none;
                 background: var(--accent);
-                color: var(--bg);
+                color: white;
                 font-weight: 600;
                 cursor: pointer;
-                transition: opacity 0.2s;
+                transition: all 0.2s ease;
                 font-size: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                box-shadow: 0 4px 10px rgba(99, 102, 241, 0.25);
             }}
 
-            button:hover {{ opacity: 0.9; }}
-            button.secondary {{ background: transparent; color: var(--text-main); border: 1px solid var(--border); }}
+            button:hover {{ 
+                transform: translateY(-2px);
+                box-shadow: 0 6px 14px rgba(99, 102, 241, 0.35);
+                background: var(--accent-hover);
+            }}
+            
+            button:active {{
+                transform: translateY(0);
+            }}
+            
+            button.secondary {{ 
+                background: var(--card-bg); 
+                color: var(--text-main); 
+                border: 1px solid var(--border); 
+                box-shadow: var(--shadow);
+            }}
+            button.secondary:hover {{
+                background: var(--hover);
+                border-color: var(--text-muted);
+            }}
 
             main {{
                 flex: 1;
@@ -258,86 +372,230 @@ def index(folder: str = None):
                 display: flex;
                 flex-direction: column;
                 gap: 32px;
+                position: relative;
+            }}
+            
+            .header-bar {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 20px;
+                background: var(--sidebar-bg);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                padding: 16px 24px;
+                border-radius: 16px;
+                border: var(--glass-border);
+                box-shadow: var(--shadow);
             }}
 
             .breadcrumbs {{
-                font-size: 15px;
+                font-size: 16px;
                 font-weight: 500;
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
             }}
 
             .breadcrumbs a {{
                 color: var(--text-muted);
                 text-decoration: none;
                 transition: color 0.2s;
+                padding: 4px 8px;
+                border-radius: 6px;
             }}
 
-            .breadcrumbs a:hover {{ color: var(--text-main); }}
-            .breadcrumbs .sep {{ color: var(--border); }}
-            .breadcrumbs a:last-child {{ color: var(--text-main); pointer-events: none; }}
+            .breadcrumbs a:hover {{ 
+                color: var(--text-main); 
+                background: var(--hover);
+            }}
+            
+            .breadcrumbs .sep {{ color: var(--border); font-weight: 300; }}
+            .breadcrumbs a:last-child {{ 
+                color: var(--accent); 
+                pointer-events: none; 
+                font-weight: 600;
+                background: rgba(99, 102, 241, 0.1);
+            }}
+
+            .controls {{
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }}
+            
+            .control-group {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: var(--card-bg);
+                padding: 4px;
+                border-radius: 10px;
+                border: 1px solid var(--border);
+            }}
+            
+            .control-btn {{
+                background: transparent;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 6px;
+                color: var(--text-muted);
+                box-shadow: none;
+                font-size: 13px;
+            }}
+            
+            .control-btn:hover {{
+                transform: none;
+                box-shadow: none;
+                background: var(--hover);
+                color: var(--text-main);
+            }}
+            
+            .control-btn.active {{
+                background: var(--bg);
+                color: var(--accent);
+                box-shadow: var(--shadow);
+                font-weight: 600;
+            }}
+
+            .controls select {{
+                padding: 8px 32px 8px 12px;
+                height: auto;
+                border-radius: 8px;
+                background-color: transparent;
+                border: none;
+                font-weight: 500;
+                cursor: pointer;
+            }}
 
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-                gap: 20px;
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                gap: 24px;
+            }}
+            
+            .list {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
             }}
 
             .item-card {{
                 background: var(--card-bg);
-                border: 1px solid var(--border);
-                border-radius: 10px;
-                padding: 16px;
+                border: var(--glass-border);
+                border-radius: 16px;
+                padding: 20px;
                 display: flex;
                 flex-direction: column;
-                gap: 14px;
-                transition: transform 0.2s, box-shadow 0.2s;
+                gap: 16px;
+                transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
                 position: relative;
+                box-shadow: var(--shadow);
+                backdrop-filter: blur(8px);
+            }}
+            
+            .list .item-card {{
+                flex-direction: row;
+                align-items: center;
+                padding: 12px 20px;
+                gap: 24px;
             }}
 
             .item-card:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 8px 16px rgba(0,0,0,0.04);
+                transform: translateY(-4px);
+                box-shadow: 0 12px 24px -8px rgba(0,0,0,0.15);
+                background: var(--card-hover);
+                border-color: var(--accent);
+            }}
+            
+            .list .item-card:hover {{
+                transform: translateX(4px);
             }}
 
             .item-info {{
                 display: flex;
                 align-items: flex-start;
-                gap: 12px;
+                gap: 16px;
+                flex: 1;
+            }}
+            
+            .list .item-info {{
+                align-items: center;
             }}
 
             .item-icon {{
-                font-size: 20px;
+                font-size: 28px;
                 line-height: 1;
                 color: var(--folder-icon);
+                background: rgba(245, 158, 11, 0.1);
+                width: 48px;
+                height: 48px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 12px;
+                transition: transform 0.2s;
+            }}
+            
+            .item-icon.file-icon {{
+                color: var(--accent);
+                background: rgba(99, 102, 241, 0.1);
+            }}
+            
+            .item-card:hover .item-icon {{
+                transform: scale(1.1);
+            }}
+
+            .item-details {{
+                flex: 1;
+                min-width: 0;
             }}
 
             .item-name {{
-                font-size: 15px;
+                font-size: 16px;
                 font-weight: 600;
                 color: var(--link);
                 text-decoration: none;
                 line-height: 1.4;
-                word-break: break-all;
+                display: block;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                transition: color 0.2s;
             }}
 
-            .item-name:hover {{ text-decoration: underline; }}
+            .item-name:hover {{ 
+                color: var(--accent);
+            }}
 
             .item-meta {{
-                font-size: 12px;
+                font-size: 13px;
                 color: var(--text-muted);
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
+                margin-top: 6px;
+            }}
+            
+            .list .item-meta {{
+                margin-top: 0;
             }}
 
             .ext-pill {{
-                background: var(--sidebar-bg);
-                padding: 2px 6px;
-                border-radius: 4px;
+                background: rgba(99, 102, 241, 0.1);
+                color: var(--accent);
+                padding: 4px 8px;
+                border-radius: 6px;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
+                font-size: 11px;
+                font-weight: 700;
+            }}
+            
+            .folder-pill {{
+                background: rgba(245, 158, 11, 0.1);
+                color: var(--folder-icon);
             }}
 
             .item-actions {{
@@ -346,47 +604,86 @@ def index(folder: str = None):
                 gap: 8px;
                 margin-top: auto;
                 border-top: 1px solid var(--border);
-                padding-top: 10px;
+                padding-top: 16px;
+            }}
+            
+            .list .item-actions {{
+                margin-top: 0;
+                border-top: none;
+                padding-top: 0;
             }}
 
             .action-btn {{
-                background: none;
+                background: transparent;
                 border: none;
                 cursor: pointer;
-                padding: 6px;
-                border-radius: 4px;
+                padding: 8px;
+                border-radius: 8px;
                 color: var(--text-muted);
-                transition: background 0.2s, color 0.2s;
+                transition: all 0.2s;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                box-shadow: none;
             }}
 
-            .action-btn:hover {{ background: var(--hover); color: var(--text-main); }}
-            .action-btn.delete:hover {{ color: #e5484d; background: #fee2e2; }}
+            .action-btn:hover {{ 
+                background: var(--hover); 
+                color: var(--accent); 
+                transform: none;
+                box-shadow: none;
+            }}
+            .action-btn.delete:hover {{ color: #ef4444; background: rgba(239, 68, 68, 0.1); }}
 
             .move-wrapper {{ flex: 1; }}
             .move-wrapper select {{
-                font-size: 11px;
-                padding: 4px 8px;
-                height: 28px;
+                font-size: 13px;
+                padding: 8px 12px;
+                height: auto;
+                background: var(--bg);
             }}
 
             .empty-state {{
                 text-align: center;
-                padding: 100px 0;
+                padding: 120px 0;
                 color: var(--text-muted);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 16px;
+            }}
+            
+            .empty-icon {{
+                font-size: 48px;
+                opacity: 0.5;
+            }}
+            
+            .empty-state h3 {{
+                margin: 0;
+                color: var(--text-main);
+                font-size: 20px;
             }}
 
-            ::-webkit-scrollbar {{ width: 8px; }}
+            ::-webkit-scrollbar {{ width: 10px; height: 10px; }}
             ::-webkit-scrollbar-track {{ background: transparent; }}
-            ::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 10px; }}
-            ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
+            ::-webkit-scrollbar-thumb {{ background: rgba(156, 163, 175, 0.5); border-radius: 10px; border: 2px solid var(--bg); }}
+            ::-webkit-scrollbar-thumb:hover {{ background: rgba(107, 114, 128, 0.8); }}
 
         </style>
         <script>
             const currentFolder = "{folder or ''}";
+            const currentSort = "{sort}";
+            const currentView = "{view}";
             
+            function updateParams(params) {{
+                const url = new URL(window.location.href);
+                for (const [key, value] of Object.entries(params)) {{
+                    if (value) url.searchParams.set(key, value);
+                    else url.searchParams.delete(key);
+                }}
+                window.location.href = url.toString();
+            }}
+
             async function uploadFile() {{
                 const fileInput = document.getElementById('fileInput');
                 if (!fileInput.files[0]) return;
@@ -457,11 +754,17 @@ def index(folder: str = None):
     </head>
     <body>
         <aside>
-            <h1>DocViewer</h1>
+            <div class="logo-container">
+                <div class="logo-icon">D</div>
+                <h1>DocViewer</h1>
+            </div>
             
             <div class="sidebar-section">
                 <span class="section-label">Management</span>
-                <button onclick="createFolder()">+ New Folder</button>
+                <button onclick="createFolder()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+                    New Folder
+                </button>
             </div>
 
             <div class="sidebar-section">
@@ -475,7 +778,10 @@ def index(folder: str = None):
                 <span class="section-label">Link Directory or File</span>
                 <div class="input-group">
                     <input type="text" id="pathInput" placeholder="Enter local path...">
-                    <button class="secondary" onclick="importPath()">Link Path</button>
+                    <button class="secondary" onclick="importPath()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                        Link Path
+                    </button>
                 </div>
             </div>
 
@@ -483,47 +789,87 @@ def index(folder: str = None):
                 <span class="section-label">Quick View</span>
                 <div class="input-group">
                     <input type="text" id="quickPathInput" placeholder="No-save view path...">
-                    <button class="secondary" onclick="quickView()">Open</button>
+                    <button class="secondary" onclick="quickView()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                        Open Temp View
+                    </button>
                 </div>
             </div>
         </aside>
 
         <main>
-            <div class="breadcrumbs">{breadcrumb_html}</div>
+            <div class="header-bar">
+                <div class="breadcrumbs">{breadcrumb_html}</div>
+                
+                <div class="controls">
+                    <div class="control-group" style="padding: 0; background: transparent; border: none;">
+                        <span style="font-size: 13px; color: var(--text-muted); font-weight: 500;">Sort:</span>
+                        <select onchange="updateParams({{sort: this.value}})" style="background: var(--card-bg); border: 1px solid var(--border);">
+                            <option value="name_asc" { 'selected' if sort == 'name_asc' else '' }>Name (A-Z)</option>
+                            <option value="name_desc" { 'selected' if sort == 'name_desc' else '' }>Name (Z-A)</option>
+                            <option value="type_asc" { 'selected' if sort == 'type_asc' else '' }>Type (A-Z)</option>
+                            <option value="type_desc" { 'selected' if sort == 'type_desc' else '' }>Type (Z-A)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <button class="control-btn { 'active' if view == 'grid' else '' }" onclick="updateParams({{view: 'grid'}})" title="Grid View">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        </button>
+                        <button class="control-btn { 'active' if view == 'list' else '' }" onclick="updateParams({{view: 'list'}})" title="List View">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
             
-            <div class="grid">
-    """
+            <div class="{view}">
+    '''
 
     if not sorted_items:
-        html += """
+        html += '''
             </div>
             <div class="empty-state">
-                <p>No documents found here.</p>
+                <div class="empty-icon">📂</div>
+                <h3>This folder is empty</h3>
+                <p>Upload a file or create a new folder to get started.</p>
             </div>
-        """
+        '''
     else:
         for doc in sorted_items:
             doc_id = doc["id"]
             is_folder = doc["type"] == "folder"
-            icon = "📁" if is_folder else "📄"
-            link = f"/?folder={doc_id}" if is_folder else f"/view/{doc_id}"
-            target = "" if is_folder else "target='_blank'"
-            explorer_btn = f'<button class="action-btn" onclick="openExplorer(\'{doc_id}\')" title="Show in Explorer">📂</button>' if doc["path"] else ""
             
-            move_options = f"<option value=''>Move...</option><option value='root'>Library Root</option>{folder_options}"
+            if is_folder:
+                icon_html = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>'
+                icon_class = ""
+                meta_html = "<span class='ext-pill folder-pill'>Folder</span>"
+            else:
+                icon_html = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>'
+                icon_class = "file-icon"
+                ext_name = doc['ext'].replace('.','') if doc['ext'] else 'FILE'
+                meta_html = f"<span class='ext-pill'>{ext_name}</span>"
+                
+            link = f"/?folder={doc_id}&sort={sort}&view={view}" if is_folder else f"/view/{doc_id}"
+            target = "" if is_folder else "target='_blank'"
+            
+            explorer_btn = f'''<button class="action-btn" onclick="openExplorer('{doc_id}')" title="Show in File Explorer">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </button>''' if doc["path"] else ""
+            
+            move_options = f"<option value=''>Move to...</option><option value='root'>Library Root</option>{folder_options}"
             move_dropdown = f"<select onchange='moveItem(\"{doc_id}\", this.value)'>{move_options}</select>"
 
-            meta = f"<span class='ext-pill'>{doc['ext'].replace('.','')}</span>" if not is_folder and doc['ext'] else "Folder"
             # Escape single quotes for JS
             safe_name = doc['name'].replace("'", "\\'")
             
-            html += f"""
+            html += f'''
                 <div class="item-card">
                     <div class="item-info">
-                        <span class="item-icon">{icon}</span>
-                        <div style="flex: 1;">
-                            <a href="{link}" {target} class="item-name">{doc['name']}</a>
-                            <div class="item-meta">{meta}</div>
+                        <div class="item-icon {icon_class}">{icon_html}</div>
+                        <div class="item-details">
+                            <a href="{link}" {target} class="item-name" title="{doc['name']}">{doc['name']}</a>
+                            <div class="item-meta">{meta_html}</div>
                         </div>
                     </div>
                     <div class="item-actions">
@@ -531,20 +877,21 @@ def index(folder: str = None):
                             {move_dropdown}
                         </div>
                         {explorer_btn}
-                        <button class="action-btn delete" onclick="deleteItem('{doc_id}', '{safe_name}', {str(is_folder).lower()})" title="Delete">🗑️</button>
+                        <button class="action-btn delete" onclick="deleteItem('{doc_id}', '{safe_name}', {str(is_folder).lower()})" title="Delete">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
                     </div>
                 </div>
-            """
+            '''
         html += "</div>"
 
-    html += """
+    html += '''
         </main>
     </body>
     </html>
-    """
+    '''
     return HTMLResponse(html)
 
-@app.post("/upload")
 def upload_file(file: UploadFile = File(...), folder: str = None):
     # Normalize empty string to None
     if not folder: folder = None
