@@ -34,6 +34,7 @@
               mammoth
               python-multipart
               markdown
+              pymupdf
             ];
 
             meta = with pkgs.lib; {
