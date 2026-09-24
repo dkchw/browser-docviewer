@@ -1173,9 +1173,12 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
                     } else if (e.key === '=' || e.key === '+') {
                         e.preventDefault();
                         changeFontSize(10);
-                    } else if (e.key === '-') {
+                    } else if (e.key === '-' || e.key === '_') {
                         e.preventDefault();
                         changeFontSize(-10);
+                    } else if (e.key === 'i' || (e.altKey && e.key.toLowerCase() === 'i')) {
+                        e.preventDefault();
+                        cycleTheme();
                     }
                 });
             });
@@ -1340,11 +1343,22 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             } else if (e.key === '=' || e.key === '+') {
                 e.preventDefault();
                 changeFontSize(10);
-            } else if (e.key === '-') {
+            } else if (e.key === '-' || e.key === '_') {
                 e.preventDefault();
                 changeFontSize(-10);
+            } else if (e.key === 'i' || (e.altKey && e.key.toLowerCase() === 'i')) {
+                e.preventDefault();
+                cycleTheme();
             }
         });
+
+        function cycleTheme() {
+            const themes = ['light', 'sepia', 'dark'];
+            const nextTheme = themes[(themes.indexOf(currentTheme) + 1) % themes.length];
+            currentTheme = nextTheme;
+            localStorage.setItem('docviewer_theme', currentTheme);
+            applyPreferences();
+        }
 
         // TOC Drawer toggling
         const drawer = document.getElementById('calibre-toc-drawer');
@@ -1836,11 +1850,22 @@ def render_html_document_viewer(
             } else if (e.key === '=' || e.key === '+') {
                 e.preventDefault();
                 changeFontSize(10);
-            } else if (e.key === '-') {
+            } else if (e.key === '-' || e.key === '_') {
                 e.preventDefault();
                 changeFontSize(-10);
+            } else if (e.key === 'i' || (e.altKey && e.key.toLowerCase() === 'i')) {
+                e.preventDefault();
+                cycleTheme();
             }
         });
+
+        function cycleTheme() {
+            const themes = ['light', 'sepia', 'dark'];
+            const nextTheme = themes[(themes.indexOf(currentTheme) + 1) % themes.length];
+            currentTheme = nextTheme;
+            localStorage.setItem('docviewer_theme', currentTheme);
+            applyPreferences();
+        }
 
         // TOC Drawer controls
         const drawer = document.getElementById('calibre-toc-drawer');

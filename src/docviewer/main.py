@@ -133,8 +133,241 @@ def get_item(doc_id: str):
         return dict(row) if row else None
 
 # --- SETUP PDF.JS ---
+def patch_pdfjs_invert_mode(pdfjs_dir: Path):
+    web_dir = pdfjs_dir / "web"
+    if not web_dir.exists():
+        return
+
+    invert_css_path = web_dir / "invert.css"
+    invert_css_content = """/* PDF.js Color Inversion / Night Mode */
+#pdf-invert-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: rgba(17, 24, 39, 0.94);
+    color: #f1f5f9;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    z-index: 10000;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    backdrop-filter: blur(8px);
+}
+
+#pdf-invert-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Invert Button Active Glow */
+#pdfInvertButton.active, #secondaryPdfInvert.active {
+    background-color: var(--button-hover-color, rgba(255, 255, 255, 0.18)) !important;
+    color: #38bdf8 !important;
+}
+
+#pdfInvertButton.active svg {
+    color: #38bdf8 !important;
+}
+
+/* Dark Invert Mode: White pages become Black, Black text becomes White */
+html[data-pdf-color-mode="dark-invert"] {
+    color-scheme: dark !important;
+}
+
+html[data-pdf-color-mode="dark-invert"] #viewerContainer {
+    background-color: #0b0f19 !important;
+}
+
+html[data-pdf-color-mode="dark-invert"] #viewer.pdfViewer .page,
+html[data-pdf-color-mode="dark-invert"] #thumbnailView .thumbnail {
+    background-color: #121826 !important;
+    border-color: #1f2937 !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
+}
+
+html[data-pdf-color-mode="dark-invert"] #viewer.pdfViewer .page canvas,
+html[data-pdf-color-mode="dark-invert"] #thumbnailView .thumbnailImage {
+    filter: invert(1) hue-rotate(180deg) contrast(0.96) brightness(0.96) !important;
+    background-color: #121826 !important;
+}
+
+html[data-pdf-color-mode="dark-invert"] #viewer.pdfViewer .page .textLayer ::selection {
+    background: rgba(56, 189, 248, 0.4) !important;
+}
+
+/* Sepia Warm Mode: Reduces eye fatigue and blue light */
+html[data-pdf-color-mode="sepia"] #viewerContainer {
+    background-color: #e8dcbe !important;
+}
+
+html[data-pdf-color-mode="sepia"] #viewer.pdfViewer .page,
+html[data-pdf-color-mode="sepia"] #thumbnailView .thumbnail {
+    background-color: #fbf0d9 !important;
+    border-color: #dfd3ba !important;
+    box-shadow: 0 4px 16px rgba(61, 46, 30, 0.15) !important;
+}
+
+html[data-pdf-color-mode="sepia"] #viewer.pdfViewer .page canvas,
+html[data-pdf-color-mode="sepia"] #thumbnailView .thumbnailImage {
+    filter: sepia(0.65) contrast(0.95) brightness(0.95) !important;
+}
+"""
+    invert_css_path.write_text(invert_css_content, encoding="utf-8")
+
+    invert_mjs_path = web_dir / "invert.mjs"
+    invert_mjs_content = """// PDF.js Color Inversion / Night Mode Controller
+(function() {
+    const MODES = ['normal', 'dark-invert', 'sepia'];
+    const LABELS = {
+        'normal': '☀️ Normal Colors',
+        'dark-invert': '🌙 Inverted Night Mode (White text on black)',
+        'sepia': '📜 Sepia Warm Mode'
+    };
+
+    let currentMode = localStorage.getItem('docviewer_pdf_color_mode') || 'normal';
+
+    function showToast(msg) {
+        let toast = document.getElementById('pdf-invert-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'pdf-invert-toast';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = msg;
+        toast.classList.add('show');
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => {
+            toast.classList.remove('show');
+        }, 1500);
+    }
+
+    function applyMode(mode, notify = false) {
+        currentMode = mode;
+        localStorage.setItem('docviewer_pdf_color_mode', mode);
+        document.documentElement.setAttribute('data-pdf-color-mode', mode);
+
+        const btn = document.getElementById('pdfInvertButton');
+        const secBtn = document.getElementById('secondaryPdfInvert');
+        const isActive = (mode !== 'normal');
+
+        if (btn) {
+            btn.classList.toggle('active', isActive);
+            btn.title = `Color Mode: ${LABELS[mode]} (Alt+I / i to toggle)`;
+        }
+        if (secBtn) {
+            secBtn.classList.toggle('active', isActive);
+        }
+
+        if (notify) {
+            showToast(LABELS[mode]);
+        }
+    }
+
+    function cycleMode() {
+        const nextIdx = (MODES.indexOf(currentMode) + 1) % MODES.length;
+        applyMode(MODES[nextIdx], true);
+    }
+
+    // Keyboard shortcut: Alt+I or i
+    window.addEventListener('keydown', function(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+            return;
+        }
+        if ((e.altKey && e.key.toLowerCase() === 'i') || (e.key === 'i' && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+            e.preventDefault();
+            cycleMode();
+        }
+    });
+
+    function initButtons() {
+        applyMode(currentMode, false);
+
+        const btn = document.getElementById('pdfInvertButton');
+        if (btn && !btn._boundInvert) {
+            btn._boundInvert = true;
+            btn.addEventListener('click', cycleMode);
+        }
+
+        const secBtn = document.getElementById('secondaryPdfInvert');
+        if (secBtn && !secBtn._boundInvert) {
+            secBtn._boundInvert = true;
+            secBtn.addEventListener('click', cycleMode);
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        window.addEventListener('DOMContentLoaded', initButtons);
+    } else {
+        initButtons();
+    }
+})();
+"""
+    invert_mjs_path.write_text(invert_mjs_content, encoding="utf-8")
+
+    # Patch viewer.html
+    viewer_html_path = web_dir / "viewer.html"
+    if viewer_html_path.exists():
+        html = viewer_html_path.read_text(encoding="utf-8")
+        modified = False
+
+        if "invert.css" not in html:
+            html = html.replace('</head>', '    <link rel="stylesheet" href="invert.css" />\n  </head>')
+            modified = True
+
+        if "invert.mjs" not in html:
+            html = html.replace('</head>', '    <script src="invert.mjs" type="module"></script>\n  </head>')
+            modified = True
+
+        if 'id="pdfInvertButton"' not in html:
+            button_html = '''
+                <button
+                  id="pdfInvertButton"
+                  class="toolbarButton"
+                  type="button"
+                  tabindex="0"
+                  title="Reverse Colors / Night Mode (Alt+I / i)"
+                  aria-label="Reverse Colors / Night Mode"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-top:2px;">
+                    <circle cx="12" cy="12" r="9"></circle>
+                    <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path>
+                  </svg>
+                  <span class="visuallyHidden">Reverse Colors</span>
+                </button>
+'''
+            if '<div id="secondaryToolbarToggle"' in html:
+                html = html.replace('<div id="secondaryToolbarToggle"', button_html + '                <div id="secondaryToolbarToggle"')
+                modified = True
+
+        if 'id="secondaryPdfInvert"' not in html:
+            sec_button_html = '''
+                      <button id="secondaryPdfInvert" class="toolbarButton labeled" type="button" tabindex="0">
+                        <span class="toolbarButtonIcon" style="display:inline-flex;align-items:center;justify-content:center;">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="9"></circle>
+                            <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path>
+                          </svg>
+                        </span>
+                        <span>Reverse Colors / Night Mode</span>
+                      </button>
+'''
+            if '<div class="horizontalToolbarSeparator"></div>' in html:
+                html = html.replace('<div class="horizontalToolbarSeparator"></div>', sec_button_html + '                      <div class="horizontalToolbarSeparator"></div>', 1)
+                modified = True
+
+        if modified:
+            viewer_html_path.write_text(html, encoding="utf-8")
+
 def ensure_pdfjs():
     if PDFJS_DIR.exists():
+        patch_pdfjs_invert_mode(PDFJS_DIR)
         return
     print("[*] First run detected. Downloading PDF.js viewer...")
     PDFJS_DIR.mkdir(parents=True, exist_ok=True)
@@ -145,6 +378,7 @@ def ensure_pdfjs():
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(PDFJS_DIR)
     zip_path.unlink()
+    patch_pdfjs_invert_mode(PDFJS_DIR)
     print("[*] PDF.js installed successfully.")
 
 # --- SEARCH HELPERS ---
