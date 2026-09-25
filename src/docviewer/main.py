@@ -214,9 +214,47 @@ html[data-pdf-color-mode="sepia"] #thumbnailView .thumbnail {
     box-shadow: 0 4px 16px rgba(61, 46, 30, 0.15) !important;
 }
 
-html[data-pdf-color-mode="sepia"] #viewer.pdfViewer .page canvas,
-html[data-pdf-color-mode="sepia"] #thumbnailView .thumbnailImage {
-    filter: sepia(0.65) contrast(0.95) brightness(0.95) !important;
+/* Dark Scrollbars for Night Mode */
+html[data-pdf-color-mode="dark-invert"] * {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 #0b0f19;
+}
+html[data-pdf-color-mode="dark-invert"] ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    background-color: #0b0f19;
+}
+html[data-pdf-color-mode="dark-invert"] ::-webkit-scrollbar-track {
+    background: #0b0f19;
+}
+html[data-pdf-color-mode="dark-invert"] ::-webkit-scrollbar-thumb {
+    background-color: #334155;
+    border-radius: 4px;
+}
+html[data-pdf-color-mode="dark-invert"] ::-webkit-scrollbar-thumb:hover {
+    background-color: #475569;
+}
+
+@media (prefers-color-scheme: dark) {
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: #334155 #1e293b;
+    }
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+        background-color: #1e293b;
+    }
+    ::-webkit-scrollbar-track {
+        background: #1e293b;
+    }
+    ::-webkit-scrollbar-thumb {
+        background-color: #334155;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background-color: #475569;
+    }
 }
 """
     invert_css_path.write_text(invert_css_content, encoding="utf-8")
@@ -509,7 +547,7 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
     # Normalize empty string to None for SQLite NULL comparisons
     if folder == "": folder = None
     if not profile: 
-        profile = request.cookies.get("default_profile", "default")
+        profile = request.cookies.get("active_profile") or request.cookies.get("default_profile", "default")
     q = q.strip() if q else None
     if search_mode not in ("name", "content"):
         search_mode = "name"
@@ -520,6 +558,9 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
     
     with get_db() as conn:
         profiles_db = conn.execute("SELECT * FROM profiles ORDER BY rank ASC, name ASC").fetchall()
+        valid_profile_ids = [p['id'] for p in profiles_db]
+        if profile not in valid_profile_ids:
+            profile = "default" if "default" in valid_profile_ids else (valid_profile_ids[0] if valid_profile_ids else "default")
         
         if folder:
             parent_item = conn.execute("SELECT * FROM items WHERE id = ? AND profile_id = ?", (folder, profile)).fetchone()
@@ -602,11 +643,11 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
         while curr:
             item = conn.execute("SELECT name, parent FROM items WHERE id = ?", (curr,)).fetchone()
             if item:
-                breadcrumbs.append(f"<a href='/?folder={curr}&sort={sort}&view={view}'>{item['name']}</a>")
+                breadcrumbs.append(f"<a href='/?folder={curr}&profile={profile}&sort={sort}&view={view}'>{item['name']}</a>")
                 curr = item['parent']
             else:
                 curr = None
-    breadcrumbs.append(f"<a href='/?sort={sort}&view={view}'>Library</a>")
+    breadcrumbs.append(f"<a href='/?profile={profile}&sort={sort}&view={view}'>Library</a>")
     breadcrumbs.reverse()
     breadcrumb_html = " <span class='sep'>/</span> ".join(breadcrumbs)
 
@@ -648,40 +689,42 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <style>
             :root {{
-                --bg: #f3f4f6;
-                --sidebar-bg: rgba(255, 255, 255, 0.7);
-                --text-main: #1f2937;
-                --text-muted: #6b7280;
-                --accent: #6366f1;
-                --accent-hover: #4f46e5;
-                --border: rgba(229, 231, 235, 0.5);
-                --card-bg: rgba(255, 255, 255, 0.8);
-                --card-hover: rgba(255, 255, 255, 1);
-                --folder-icon: #f59e0b;
-                --hover: rgba(243, 244, 246, 0.8);
-                --link: #111827;
-                --glass-border: 1px solid rgba(255, 255, 255, 0.3);
-                --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+                color-scheme: dark;
+                --bg: #0f172a;
+                --sidebar-bg: rgba(30, 41, 59, 0.7);
+                --text-main: #f1f5f9;
+                --text-muted: #94a3b8;
+                --accent: #818cf8;
+                --accent-hover: #6366f1;
+                --border: rgba(51, 65, 85, 0.5);
+                --card-bg: rgba(30, 41, 59, 0.6);
+                --card-hover: rgba(30, 41, 59, 0.9);
+                --folder-icon: #fbbf24;
+                --hover: rgba(51, 65, 85, 0.8);
+                --link: #f8fafc;
+                --glass-border: 1px solid rgba(255, 255, 255, 0.05);
+                --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
             }}
-            @media (prefers-color-scheme: dark) {{
-                :root {{
-                    --bg: #0f172a;
-                    --sidebar-bg: rgba(30, 41, 59, 0.7);
-                    --text-main: #f1f5f9;
-                    --text-muted: #94a3b8;
-                    --accent: #818cf8;
-                    --accent-hover: #6366f1;
-                    --border: rgba(51, 65, 85, 0.5);
-                    --card-bg: rgba(30, 41, 59, 0.6);
-                    --card-hover: rgba(30, 41, 59, 0.9);
-                    --folder-icon: #fbbf24;
-                    --hover: rgba(51, 65, 85, 0.8);
-                    --link: #f8fafc;
-                    --glass-border: 1px solid rgba(255, 255, 255, 0.05);
-                    --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
-                }}
+            * {{
+                box-sizing: border-box;
+                scrollbar-width: thin;
+                scrollbar-color: #334155 #0b0f19;
             }}
-            * {{ box-sizing: border-box; }}
+            ::-webkit-scrollbar {{
+                width: 8px;
+                height: 8px;
+                background-color: var(--bg);
+            }}
+            ::-webkit-scrollbar-track {{
+                background: var(--bg);
+            }}
+            ::-webkit-scrollbar-thumb {{
+                background-color: #334155;
+                border-radius: 4px;
+            }}
+            ::-webkit-scrollbar-thumb:hover {{
+                background-color: #475569;
+            }}
             body {{
                 font-family: 'Outfit', sans-serif;
                 background-color: var(--bg);
@@ -694,14 +737,6 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                 display: flex;
                 height: 100vh;
                 overflow: hidden;
-            }}
-            @media (prefers-color-scheme: light) {{
-                body {{
-                    background-image: 
-                        radial-gradient(at 0% 0%, hsla(253,100%,96%,1) 0, transparent 50%), 
-                        radial-gradient(at 50% 0%, hsla(225,100%,94%,0.8) 0, transparent 50%), 
-                        radial-gradient(at 100% 0%, hsla(339,100%,94%,0.8) 0, transparent 50%);
-                }}
             }}
             aside {{
                 width: 320px;
@@ -1060,6 +1095,9 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
             
             function updateParams(params) {{
                 const url = new URL(window.location.href);
+                if (currentProfile && !url.searchParams.get('profile')) {{
+                    url.searchParams.set('profile', currentProfile);
+                }}
                 for (const [key, value] of Object.entries(params)) {{
                     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
                     else url.searchParams.delete(key);
@@ -1088,10 +1126,14 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
             }}
 
             function switchProfile(val) {{
-                if (val !== currentProfile) updateParams({{profile: val, folder: ''}});
+                if (val !== currentProfile) {{
+                    document.cookie = "active_profile=" + encodeURIComponent(val) + "; path=/; max-age=31536000; SameSite=Lax";
+                    updateParams({{profile: val, folder: '', q: ''}});
+                }}
             }}
             function setDefaultProfile() {{
-                document.cookie = "default_profile=" + currentProfile + "; path=/; max-age=31536000";
+                document.cookie = "default_profile=" + encodeURIComponent(currentProfile) + "; path=/; max-age=31536000; SameSite=Lax";
+                document.cookie = "active_profile=" + encodeURIComponent(currentProfile) + "; path=/; max-age=31536000; SameSite=Lax";
                 alert("This profile is now your default when you open the app!");
             }}
             
@@ -1104,7 +1146,8 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                 }});
                 if (response.ok) {{
                     const data = await response.json();
-                    updateParams({{profile: data.id, folder: ''}});
+                    document.cookie = "active_profile=" + encodeURIComponent(data.id) + "; path=/; max-age=31536000; SameSite=Lax";
+                    updateParams({{profile: data.id, folder: '', q: ''}});
                 }}
             }}
             async function renameProfile() {{
@@ -1123,7 +1166,10 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                     method: 'POST', headers: {{'Content-Type': 'application/json'}},
                     body: JSON.stringify({{action: 'remove', id: currentProfile}})
                 }});
-                if (response.ok) updateParams({{profile: 'default', folder: ''}});
+                if (response.ok) {{
+                    document.cookie = "active_profile=default; path=/; max-age=31536000; SameSite=Lax";
+                    updateParams({{profile: 'default', folder: '', q: ''}});
+                }}
             }}
 
             async function toggleStar(docId) {{
@@ -1245,7 +1291,7 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                             try {{
                                 const response = await fetch('/add-path', {{
                                     method: "POST", headers: {{ "Content-Type": "application/json" }},
-                                    body: JSON.stringify({{ path: localPath, parent: currentFolder || null }})
+                                    body: JSON.stringify({{ path: localPath, parent: currentFolder || null, profile: currentProfile }})
                                 }});
                                 if (response.ok) linked = true;
                             }} catch (err) {{}}
@@ -1415,7 +1461,7 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
             </div>
         </div>
         <aside>
-            <div class="logo-container">
+            <div class="logo-container" style="cursor: pointer;" onclick="window.location.href='/?profile=' + encodeURIComponent(currentProfile)">
                 <div class="logo-icon">D</div>
                 <h1>DocViewer</h1>
             </div>
@@ -1591,7 +1637,7 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                     extra_note = f"<div style='font-size: 12px; color: var(--text-muted); padding: 4px 8px;'>+ {extra_count} more match(es) in this file — <a href='{doc_view_url}' target='_blank' style='color: var(--accent); font-weight: 500;'>Open document to view all</a></div>"
 
                 safe_cr_name = pyhtml.escape(cr['name'], quote=True)
-                folder_link = f"/?folder={cr['parent']}" if cr["parent"] else "/?"
+                folder_link = f"/?folder={cr['parent']}&profile={profile}" if cr["parent"] else f"/?profile={profile}"
                 html += f'''
                 <div class="content-result-card">
                     <div class="content-card-header">
@@ -1667,9 +1713,9 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
                 if recursive and doc.get("parent") != folder and doc.get("parent"):
                     p_name = folder_path_map.get(doc["parent"], "")
                     if p_name:
-                        meta_html += f"<a href='/?folder={doc['parent']}' style='font-size: 11px; color: var(--text-muted); text-decoration: none; padding: 2px 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;' title='Location: {p_name}'>📁 {p_name}</a>"
+                        meta_html += f"<a href='/?folder={doc['parent']}&profile={profile}' style='font-size: 11px; color: var(--text-muted); text-decoration: none; padding: 2px 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;' title='Location: {p_name}'>📁 {p_name}</a>"
                     
-                link = f"/?folder={doc_id}&sort={sort}&view={view}" if is_folder else f"/view/{doc_id}"
+                link = f"/?folder={doc_id}&profile={profile}&sort={sort}&view={view}" if is_folder else f"/view/{doc_id}"
                 target = "" if is_folder else "target='_blank'"
                 
                 explorer_btn = f'''<button class="action-btn" onclick="openExplorer('{doc_id}')" title="Show in File Explorer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></button>''' if doc["path"] else ""
@@ -1862,7 +1908,9 @@ def index(request: Request, profile: str = None, folder: str = None, sort: str =
     </html>
     '''
     html = html.replace("{profile_export_list}", profile_export_list)
-    return HTMLResponse(html)
+    response = HTMLResponse(html)
+    response.set_cookie("active_profile", profile, max_age=31536000, path="/", samesite="lax")
+    return response
 
 @app.post("/profile")
 def manage_profile(req: dict):
@@ -2747,6 +2795,7 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
 
     ext = doc["ext"]
     file_path = doc["path"]
+    profile_id = doc.get("profile_id", "default")
 
     query = search or q or request.query_params.get("search") or request.query_params.get("q")
     page_num = page or request.query_params.get("page")
@@ -2774,7 +2823,8 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
             doc_id=doc_id,
             doc_name=doc["name"],
             query=query,
-            match_idx=match_idx
+            match_idx=match_idx,
+            profile_id=profile_id
         ))
 
     elif ext == ".docx":
@@ -2790,7 +2840,8 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
             body_html=html_content,
             query=query,
             match_idx=match_idx,
-            extra_stats=extra_stats
+            extra_stats=extra_stats,
+            profile_id=profile_id
         ))
 
     elif ext in [".odt", ".odf"]:
@@ -2806,7 +2857,8 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
                 body_html=html_content,
                 query=query,
                 match_idx=match_idx,
-                extra_stats=extra_stats
+                extra_stats=extra_stats,
+                profile_id=profile_id
             ))
         except Exception as e:
             return HTMLResponse(f"<b>Error:</b> Requires 'pandoc' installed on system (or pandoc failed: {e}).", status_code=500)
@@ -2835,7 +2887,8 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
             body_html=body_html,
             query=query,
             match_idx=match_idx,
-            extra_stats=extra_stats
+            extra_stats=extra_stats,
+            profile_id=profile_id
         ))
 
     elif ext == ".md":
@@ -2853,7 +2906,8 @@ def view_doc(doc_id: str, request: Request, page: Optional[int] = None, search: 
             body_html=html_content,
             query=query,
             match_idx=match_idx,
-            extra_stats=extra_stats
+            extra_stats=extra_stats,
+            profile_id=profile_id
         ))
 
     return HTMLResponse("Unsupported file format.", status_code=400)

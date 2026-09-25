@@ -5,13 +5,39 @@ for EPUB, DOCX, ODT, Markdown, and TXT files.
 """
 
 import re
+import urllib.parse
 import html as pyhtml
 from typing import Optional, List, Dict, Any
 
 
 def get_reader_css() -> str:
     return """
-    :root {
+    :root, [data-theme="dark"] {
+        color-scheme: dark;
+        --bg-page: #0b0f19;
+        --bg-surface: #111827;
+        --bg-header: rgba(17, 24, 39, 0.96);
+        --border-color: #1f2937;
+        --text-primary: #cbd5e1;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        --accent: #38bdf8;
+        --accent-hover: #60a5fa;
+        --accent-light: #1e293b;
+        --toc-bg: #111827;
+        --toc-hover: #1f2937;
+        --toc-active: #1e3a5f;
+        --toc-active-text: #38bdf8;
+        --progress-track: #1f2937;
+        --progress-fill: #38bdf8;
+        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+        --code-bg: #1e293b;
+        --code-border: #334155;
+        --paper-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 10px 25px -5px rgba(0,0,0,0.4);
+    }
+
+    [data-theme="light"] {
+        color-scheme: light;
         --bg-page: #f1f5f9;
         --bg-surface: #ffffff;
         --bg-header: rgba(255, 255, 255, 0.96);
@@ -35,6 +61,7 @@ def get_reader_css() -> str:
     }
 
     [data-theme="sepia"] {
+        color-scheme: light;
         --bg-page: #f4ebd9;
         --bg-surface: #fbf0d9;
         --bg-header: rgba(246, 237, 219, 0.96);
@@ -57,27 +84,37 @@ def get_reader_css() -> str:
         --paper-shadow: 0 1px 3px rgba(61,46,30,0.08), 0 10px 25px -5px rgba(61,46,30,0.06);
     }
 
-    [data-theme="dark"] {
-        --bg-page: #0b0f19;
-        --bg-surface: #111827;
-        --bg-header: rgba(17, 24, 39, 0.96);
-        --border-color: #1f2937;
-        --text-primary: #cbd5e1;
-        --text-secondary: #94a3b8;
-        --text-muted: #64748b;
-        --accent: #38bdf8;
-        --accent-hover: #60a5fa;
-        --accent-light: #1e293b;
-        --toc-bg: #111827;
-        --toc-hover: #1f2937;
-        --toc-active: #1e3a5f;
-        --toc-active-text: #38bdf8;
-        --progress-track: #1f2937;
-        --progress-fill: #38bdf8;
-        --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
-        --code-bg: #1e293b;
-        --code-border: #334155;
-        --paper-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 10px 25px -5px rgba(0,0,0,0.4);
+    /* Scrollbars */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: #334155 #0b0f19;
+    }
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+        background-color: var(--bg-page);
+    }
+    ::-webkit-scrollbar-track {
+        background: var(--bg-page);
+    }
+    ::-webkit-scrollbar-thumb {
+        background-color: #334155;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background-color: #475569;
+    }
+    [data-theme="light"] * {
+        scrollbar-color: #cbd5e1 #f1f5f9;
+    }
+    [data-theme="light"] ::-webkit-scrollbar-thumb {
+        background-color: #cbd5e1;
+    }
+    [data-theme="sepia"] * {
+        scrollbar-color: #d1c0a0 #f4ebd9;
+    }
+    [data-theme="sepia"] ::-webkit-scrollbar-thumb {
+        background-color: #d1c0a0;
     }
 
     * {
@@ -230,6 +267,51 @@ def get_reader_css() -> str:
         text-overflow: ellipsis;
         max-width: 100%;
         margin-top: 1px;
+    }
+
+    .layout-segmented {
+        display: flex;
+        align-items: center;
+        background: var(--bg-page);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 2px;
+        gap: 2px;
+    }
+
+    .layout-opt-btn {
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        user-select: none;
+        white-space: nowrap;
+    }
+
+    .layout-opt-btn:hover {
+        background: var(--toc-hover);
+        color: var(--text-primary);
+    }
+
+    .layout-opt-btn.active {
+        background: var(--bg-surface);
+        color: var(--accent);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+        font-weight: 600;
+    }
+
+    @media (max-width: 900px) {
+        .layout-opt-btn span {
+            display: none;
+        }
     }
 
     .theme-segmented {
@@ -707,12 +789,143 @@ def get_reader_css() -> str:
         display: flex;
         justify-content: center;
         align-items: center;
+        overflow: hidden;
     }
 
     #epub-viewer {
         width: 100%;
         height: 100%;
+        max-width: 820px;
+        margin: 0 auto;
+        position: relative;
+        background-color: var(--bg-surface);
+        box-shadow: var(--paper-shadow);
+        transition: max-width 0.2s ease, background-color 0.2s ease;
     }
+
+    /* Single Page measure constraints */
+    [data-layout="single"] #epub-viewer,
+    [data-spread="none"] #epub-viewer {
+        max-width: 820px;
+    }
+    [data-layout="single"][data-width="wide"] #epub-viewer,
+    [data-spread="none"][data-width="wide"] #epub-viewer {
+        max-width: 1100px;
+    }
+    [data-layout="single"][data-width="full"] #epub-viewer,
+    [data-spread="none"][data-width="full"] #epub-viewer {
+        max-width: 100%;
+    }
+
+    /* Double Page (2-Page Spread) */
+    [data-layout="double"] #epub-viewer,
+    [data-spread="always"] #epub-viewer {
+        max-width: 1480px;
+        width: 96%;
+    }
+    [data-layout="double"][data-width="wide"] #epub-viewer,
+    [data-spread="always"][data-width="wide"] #epub-viewer {
+        max-width: 1720px;
+        width: 98%;
+    }
+    [data-layout="double"][data-width="full"] #epub-viewer,
+    [data-spread="always"][data-width="full"] #epub-viewer {
+        max-width: 100%;
+        width: 100%;
+    }
+
+    /* Subtle spine divider line between the 2 pages */
+    [data-layout="double"] #epub-viewer::after,
+    [data-spread="always"] #epub-viewer::after {
+        content: "";
+        position: absolute;
+        top: 24px;
+        bottom: 24px;
+        left: 50%;
+        width: 1px;
+        background: var(--border-color);
+        opacity: 0.55;
+        pointer-events: none;
+        z-index: 50;
+    }
+
+    @media (max-width: 768px) {
+        [data-layout="double"] #epub-viewer::after,
+        [data-spread="always"] #epub-viewer::after {
+            display: none !important;
+        }
+    }
+
+    /* Continuous Scroll Mode: Fits the screen completely! */
+    [data-layout="scroll"] #epub-viewer-wrapper,
+    [data-flow="scrolled-doc"] #epub-viewer-wrapper,
+    [data-flow="scrolled"] #epub-viewer-wrapper {
+        display: block !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        width: 100% !important;
+        height: 100% !important;
+        background-color: var(--bg-page);
+        padding: 0 !important;
+    }
+
+    [data-layout="scroll"] #epub-viewer,
+    [data-flow="scrolled-doc"] #epub-viewer,
+    [data-flow="scrolled"] #epub-viewer {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        min-height: 100% !important;
+        height: 100% !important;
+        box-shadow: none !important;
+        border: none !important;
+        border-radius: 0 !important;
+        background-color: var(--bg-surface);
+    }
+
+    [data-layout="scroll"] #epub-viewer::after,
+    [data-flow="scrolled-doc"] #epub-viewer::after,
+    [data-flow="scrolled"] #epub-viewer::after {
+        display: none !important;
+    }
+
+    [data-layout="scroll"] .floating-nav-btn,
+    [data-flow="scrolled-doc"] .floating-nav-btn,
+    [data-flow="scrolled"] .floating-nav-btn {
+        display: none !important;
+    }
+
+    [data-layout="scroll"] .epub-container,
+    [data-flow="scrolled-doc"] .epub-container,
+    [data-flow="scrolled"] .epub-container {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    [data-layout="scroll"] .epub-view,
+    [data-flow="scrolled-doc"] .epub-view,
+    [data-flow="scrolled"] .epub-view {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    [data-layout="scroll"] .epub-view iframe,
+    [data-flow="scrolled-doc"] .epub-view iframe,
+    [data-flow="scrolled"] .epub-view iframe {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .epub-nav-zone {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 18%;
+        z-index: 100;
+        cursor: pointer;
+    }
+    .epub-nav-zone-prev { left: 0; }
+    .epub-nav-zone-next { right: 0; }
 
     /* Search Highlights */
     mark.docviewer-match {
@@ -799,13 +1012,26 @@ def get_reader_header_html(
     doc_name: str,
     is_epub: bool = False,
     is_txt: bool = False,
-    stats_text: Optional[str] = None
+    stats_text: Optional[str] = None,
+    profile_id: Optional[str] = None
 ) -> str:
     safe_name = pyhtml.escape(doc_name)
+    return_url = f"/?profile={urllib.parse.quote(profile_id)}" if profile_id else "/"
     epub_flow_btn = """
-    <button id="btn-flow-toggle" class="header-btn" title="Toggle Paged (Book) / Continuous (Scroll)">
-        <span id="flow-icon">📖</span> <span id="flow-label">Paged</span>
-    </button>
+    <div class="layout-segmented" title="Layout Mode">
+        <button id="btn-layout-single" class="layout-opt-btn active" data-layout-val="single" title="Single Page (1-Page)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+            <span>1-Page</span>
+        </button>
+        <button id="btn-layout-double" class="layout-opt-btn" data-layout-val="double" title="Double Page (2-Page Spread, Shortcut: d)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            <span>2-Page</span>
+        </button>
+        <button id="btn-layout-scroll" class="layout-opt-btn" data-layout-val="scroll" title="Continuous Scroll (Fit Screen)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>
+            <span>Scroll</span>
+        </button>
+    </div>
     """ if is_epub else ""
 
     txt_lines_btn = """
@@ -817,7 +1043,7 @@ def get_reader_header_html(
     return f"""
     <header class="calibre-header">
         <div class="header-group">
-            <a href="/" class="header-btn" title="Return to Library">
+            <a href="{return_url}" class="header-btn" title="Return to Library">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
                 <span>Library</span>
             </a>
@@ -954,10 +1180,10 @@ def get_reader_search_bar_html(query: Optional[str] = None) -> str:
     """
 
 
-def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, match_idx: int = 0) -> str:
+def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, match_idx: int = 0, profile_id: Optional[str] = None) -> str:
     """Renders the comprehensive Calibre-like EPUB reader."""
     css = get_reader_css()
-    header_html = get_reader_header_html(doc_name, is_epub=True)
+    header_html = get_reader_header_html(doc_name, is_epub=True, profile_id=profile_id)
     drawer_html = get_reader_drawer_html()
     footer_html = get_reader_footer_html()
     search_bar_html = get_reader_search_bar_html(query)
@@ -966,7 +1192,7 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
     initial_query_js = f'"{pyhtml.escape(query)}"' if query else '""'
 
     template = """<!DOCTYPE html>
-<html lang="en" data-theme="light" data-font="serif" data-width="normal">
+<html lang="en" data-theme="dark" data-font="serif" data-width="normal">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -997,18 +1223,36 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
         const initialMatchIdx = %%INITIAL_MATCH_IDX%%;
 
         // Theme and Preferences
-        let currentTheme = localStorage.getItem('docviewer_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        let currentTheme = localStorage.getItem('docviewer_theme') || 'dark';
         let currentFont = localStorage.getItem('docviewer_font') || 'serif';
         let currentWidth = localStorage.getItem('docviewer_width') || 'normal';
         let currentFontSize = parseInt(localStorage.getItem('docviewer_font_size') || '100', 10);
-        let currentFlow = localStorage.getItem('docviewer_flow_' + docId) || localStorage.getItem('docviewer_flow') || 'paginated';
+
+        // Layout: 'single' (1-Page), 'double' (2-Page Spread), 'scroll' (Continuous)
+        let currentLayout = localStorage.getItem('docviewer_epub_layout_' + docId) 
+                         || localStorage.getItem('docviewer_epub_layout');
+        if (!currentLayout) {
+            const oldFlow = localStorage.getItem('docviewer_flow_' + docId) || localStorage.getItem('docviewer_flow');
+            currentLayout = (oldFlow === 'scrolled-doc' || oldFlow === 'scrolled') ? 'scroll' : 'single';
+        }
+
+        let currentFlow = (currentLayout === 'scroll') ? 'scrolled-doc' : 'paginated';
+        let currentSpread = (currentLayout === 'double') ? 'always' : 'none';
 
         const rootEl = document.documentElement;
         function applyPreferences() {
             rootEl.setAttribute('data-theme', currentTheme);
             rootEl.setAttribute('data-font', currentFont);
             rootEl.setAttribute('data-width', currentWidth);
+            rootEl.setAttribute('data-layout', currentLayout);
+            rootEl.setAttribute('data-flow', currentFlow);
+            rootEl.setAttribute('data-spread', currentSpread);
             
+            // Update layout segmented control
+            document.querySelectorAll('.layout-opt-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-layout-val') === currentLayout);
+            });
+
             // Update theme segmented control
             document.querySelectorAll('.theme-opt-btn').forEach(btn => {
                 btn.classList.toggle('active', btn.getAttribute('data-theme-val') === currentTheme);
@@ -1022,19 +1266,9 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             if (selectFont) selectFont.value = currentFont;
 
             const selectWidth = document.getElementById('select-width');
-            if (selectWidth) selectWidth.value = currentWidth;
-
-            // Flow buttons
-            const flowIcon = document.getElementById('flow-icon');
-            const flowLabel = document.getElementById('flow-label');
-            if (flowIcon && flowLabel) {
-                if (currentFlow === 'scrolled-doc') {
-                    flowIcon.textContent = '📜';
-                    flowLabel.textContent = 'Scroll';
-                } else {
-                    flowIcon.textContent = '📖';
-                    flowLabel.textContent = 'Paged';
-                }
+            if (selectWidth) {
+                selectWidth.value = currentWidth;
+                selectWidth.disabled = (currentLayout === 'scroll');
             }
 
             // Sync with EPUB rendition styles
@@ -1052,28 +1286,59 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             };
             const font = fontFamilies[currentFont] || fontFamilies['serif'];
 
-            let bg = '#ffffff', fg = '#1e293b', link = '#2563eb', hColor = '#0f172a', border = '#e2e8f0', codeBg = '#f8fafc';
+            let bg = '#ffffff', fg = '#1e293b', link = '#2563eb', hColor = '#0f172a', border = '#e2e8f0', codeBg = '#f8fafc', scrollThumb = '#cbd5e1';
             if (currentTheme === 'sepia') {
-                bg = '#fbf0d9'; fg = '#3d2e1e'; link = '#92400e'; hColor = '#291e10'; border = '#e4d7bc'; codeBg = '#f1e3c7';
+                bg = '#fbf0d9'; fg = '#3d2e1e'; link = '#92400e'; hColor = '#291e10'; border = '#e4d7bc'; codeBg = '#f1e3c7'; scrollThumb = '#d1c0a0';
             } else if (currentTheme === 'dark') {
-                bg = '#111827'; fg = '#cbd5e1'; link = '#38bdf8'; hColor = '#f1f5f9'; border = '#1f2937'; codeBg = '#1e293b';
+                bg = '#111827'; fg = '#cbd5e1'; link = '#38bdf8'; hColor = '#f1f5f9'; border = '#1f2937'; codeBg = '#1e293b'; scrollThumb = '#334155';
             }
 
             const imgFilter = currentTheme === 'dark' ? 'filter: brightness(0.85) contrast(1.05) !important;' : '';
+            const isPaged = (currentLayout !== 'scroll');
+            const isDouble = (currentLayout === 'double');
 
             return `
-                html, body {
+                * {
+                    box-sizing: border-box !important;
+                    scrollbar-width: thin;
+                    scrollbar-color: ${scrollThumb} ${bg};
+                }
+                ::-webkit-scrollbar {
+                    width: 8px;
+                    height: 8px;
+                    background-color: ${bg};
+                }
+                ::-webkit-scrollbar-track {
+                    background: ${bg};
+                }
+                ::-webkit-scrollbar-thumb {
+                    background-color: ${scrollThumb};
+                    border-radius: 4px;
+                }
+                ::-webkit-scrollbar-thumb:hover {
+                    background-color: ${currentTheme === 'dark' ? '#475569' : '#94a3b8'};
+                }
+                html {
+                    background-color: ${bg} !important;
+                    color: ${fg} !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    width: 100% !important;
+                    height: 100% !important;
+                    overflow: ${isPaged ? 'hidden' : 'auto'} !important;
+                }
+                body {
                     background-color: ${bg} !important;
                     color: ${fg} !important;
                     font-family: ${font} !important;
                     font-size: ${currentFontSize}% !important;
                     line-height: 1.75 !important;
                     box-sizing: border-box !important;
-                }
-                body {
-                    padding: 24px 32px !important;
-                    max-width: ${currentWidth === 'wide' ? '1080px' : (currentWidth === 'full' ? '100%' : '780px')} !important;
-                    margin: 0 auto !important;
+                    width: 100% !important;
+                    max-width: 100% !important;
+                    margin: 0 !important;
+                    padding: ${isPaged ? (isDouble ? '28px 44px' : '28px 36px') : '36px 6%'} !important;
+                    ${isPaged ? 'height: 100% !important;' : 'min-height: 100% !important; height: auto !important;'}
                 }
                 p, div, span, li, blockquote, td, th {
                     color: ${fg} !important;
@@ -1133,25 +1398,88 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
         let tocEntries = [];
         let savedCfi = localStorage.getItem('docviewer_epub_cfi_' + docId);
 
+        let lastWheelTime = 0;
+        function handleWheel(e) {
+            if (currentLayout === 'scroll') return;
+            if (Math.abs(e.deltaY) < 16) return;
+            const now = Date.now();
+            if (now - lastWheelTime < 260) {
+                e.preventDefault();
+                return;
+            }
+            lastWheelTime = now;
+            e.preventDefault();
+            if (e.deltaY > 0) {
+                nextPage();
+            } else {
+                prevPage();
+            }
+        }
+
+        function handleResize() {
+            if (!rendition) return;
+            const viewerEl = document.getElementById("epub-viewer");
+            if (viewerEl) {
+                const w = viewerEl.clientWidth;
+                const h = viewerEl.clientHeight;
+                if (w > 0 && h > 0) {
+                    rendition.resize(w, h);
+                }
+            }
+        }
+
+        let resizeDebounce = null;
+        window.addEventListener('resize', function() {
+            clearTimeout(resizeDebounce);
+            resizeDebounce = setTimeout(handleResize, 150);
+        });
+
         function initRendition() {
             const viewerEl = document.getElementById("epub-viewer");
             viewerEl.innerHTML = "";
 
+            const isScroll = (currentLayout === 'scroll');
+            const isDouble = (currentLayout === 'double');
+
             rendition = book.renderTo("epub-viewer", {
                 width: "100%",
                 height: "100%",
-                flow: currentFlow,
-                spread: currentFlow === 'paginated' ? "auto" : "none",
-                minSpreadWidth: 1000
+                flow: isScroll ? "scrolled" : "paginated",
+                manager: isScroll ? "continuous" : "default",
+                spread: isDouble ? "always" : "none",
+                minSpreadWidth: isDouble ? 600 : 99999
             });
 
-            // Register content hook for continuous styling and keyboard shortcuts
+            // Register content hook for continuous styling, mouse events, and keyboard shortcuts
             rendition.hooks.content.register(function(contents) {
                 const target = contents.document.head || contents.document.body || contents.document.documentElement;
                 const styleEl = contents.document.createElement('style');
                 styleEl.id = 'docviewer-epub-override';
                 styleEl.textContent = getEpubIframeCss();
                 target.appendChild(styleEl);
+
+                // Mouse wheel page flipping inside iframe
+                contents.document.addEventListener('wheel', handleWheel, { passive: false });
+
+                // Mouse click page navigation in left/right margins inside iframe
+                contents.document.addEventListener('click', function(e) {
+                    if (currentLayout === 'scroll') return;
+                    try {
+                        const sel = contents.window.getSelection();
+                        if (sel && sel.toString().trim().length > 0) return;
+                    } catch (err) {}
+                    if (e.target.closest('a, button, input, textarea, select')) return;
+
+                    const docWidth = contents.document.documentElement.clientWidth || contents.window.innerWidth;
+                    const x = e.clientX;
+                    if (x < docWidth * 0.22) {
+                        e.preventDefault();
+                        prevPage();
+                    } else if (x > docWidth * 0.78) {
+                        e.preventDefault();
+                        nextPage();
+                    }
+                });
 
                 contents.document.addEventListener('keydown', function(e) {
                     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -1179,6 +1507,9 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
                     } else if (e.key === 'i' || (e.altKey && e.key.toLowerCase() === 'i')) {
                         e.preventDefault();
                         cycleTheme();
+                    } else if (e.key === 'd' || e.key === 'D') {
+                        e.preventDefault();
+                        changeLayout(currentLayout === 'double' ? 'single' : 'double');
                     }
                 });
             });
@@ -1320,6 +1651,30 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
         document.getElementById('floating-prev')?.addEventListener('click', prevPage);
         document.getElementById('floating-next')?.addEventListener('click', nextPage);
 
+        // Window-level wheel handler for paginated reading
+        window.addEventListener('wheel', handleWheel, { passive: false });
+
+        // Outer wrapper margin click navigation
+        const wrapperEl = document.getElementById('epub-viewer-wrapper');
+        if (wrapperEl) {
+            wrapperEl.addEventListener('click', function(e) {
+                if (currentLayout === 'scroll') return;
+                if (e.target.closest('.calibre-header, .calibre-footer, .calibre-toc-drawer, .calibre-search-bar, .floating-nav-btn, button, a')) return;
+                try {
+                    const sel = window.getSelection();
+                    if (sel && sel.toString().trim().length > 0) return;
+                } catch(err) {}
+
+                const rect = wrapperEl.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                if (x < rect.width * 0.5) {
+                    prevPage();
+                } else {
+                    nextPage();
+                }
+            });
+        }
+
         // Keyboard Shortcuts
         document.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
@@ -1349,6 +1704,9 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             } else if (e.key === 'i' || (e.altKey && e.key.toLowerCase() === 'i')) {
                 e.preventDefault();
                 cycleTheme();
+            } else if (e.key === 'd' || e.key === 'D') {
+                e.preventDefault();
+                changeLayout(currentLayout === 'double' ? 'single' : 'double');
             }
         });
 
@@ -1414,6 +1772,7 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             currentWidth = e.target.value;
             localStorage.setItem('docviewer_width', currentWidth);
             applyPreferences();
+            setTimeout(handleResize, 60);
         });
 
         // Font Size Adjustments
@@ -1430,13 +1789,43 @@ def render_epub_viewer(doc_id: str, doc_name: str, query: Optional[str] = None, 
             applyPreferences();
         });
 
-        // Flow Mode Toggle
-        document.getElementById('btn-flow-toggle')?.addEventListener('click', function() {
-            currentFlow = currentFlow === 'paginated' ? 'scrolled-doc' : 'paginated';
+        // Layout Mode Switching (Single Page, Double Page, Continuous Scroll)
+        function changeLayout(newLayout) {
+            if (newLayout === currentLayout) return;
+
+            try {
+                if (rendition && rendition.currentLocation && rendition.currentLocation() && rendition.currentLocation().start) {
+                    savedCfi = rendition.currentLocation().start.cfi;
+                    localStorage.setItem('docviewer_epub_cfi_' + docId, savedCfi);
+                }
+            } catch(e) {}
+
+            currentLayout = newLayout;
+            localStorage.setItem('docviewer_epub_layout_' + docId, currentLayout);
+            localStorage.setItem('docviewer_epub_layout', currentLayout);
+
+            if (currentLayout === 'scroll') {
+                currentFlow = 'scrolled-doc';
+                currentSpread = 'none';
+            } else if (currentLayout === 'double') {
+                currentFlow = 'paginated';
+                currentSpread = 'always';
+            } else {
+                currentLayout = 'single';
+                currentFlow = 'paginated';
+                currentSpread = 'none';
+            }
             localStorage.setItem('docviewer_flow_' + docId, currentFlow);
-            localStorage.setItem('docviewer_flow', currentFlow);
+
             applyPreferences();
             initRendition();
+        }
+
+        document.querySelectorAll('.layout-opt-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const layoutVal = btn.getAttribute('data-layout-val');
+                if (layoutVal) changeLayout(layoutVal);
+            });
         });
 
         // Fullscreen
@@ -1572,7 +1961,8 @@ def render_html_document_viewer(
     body_html: str,
     query: Optional[str] = None,
     match_idx: int = 0,
-    extra_stats: Optional[str] = None
+    extra_stats: Optional[str] = None,
+    profile_id: Optional[str] = None
 ) -> str:
     """
     Renders unified Calibre-like paper reading experience for
@@ -1580,7 +1970,7 @@ def render_html_document_viewer(
     """
     css = get_reader_css()
     is_txt = (ext == ".txt")
-    header_html = get_reader_header_html(doc_name, is_epub=False, is_txt=is_txt, stats_text=extra_stats)
+    header_html = get_reader_header_html(doc_name, is_epub=False, is_txt=is_txt, stats_text=extra_stats, profile_id=profile_id)
     drawer_html = get_reader_drawer_html()
     footer_html = get_reader_footer_html(extra_stats=extra_stats)
     search_bar_html = get_reader_search_bar_html(query)
@@ -1598,7 +1988,7 @@ def render_html_document_viewer(
         """
 
     template = """<!DOCTYPE html>
-<html lang="en" data-theme="light" data-font="serif" data-width="normal">
+<html lang="en" data-theme="dark" data-font="serif" data-width="normal">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1634,7 +2024,7 @@ def render_html_document_viewer(
         const isTxt = %%IS_TXT%%;
 
         // Theme & typography
-        let currentTheme = localStorage.getItem('docviewer_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        let currentTheme = localStorage.getItem('docviewer_theme') || 'dark';
         let currentFont = localStorage.getItem('docviewer_font') || (isTxt ? 'mono' : 'serif');
         let currentWidth = localStorage.getItem('docviewer_width') || 'normal';
         let currentFontSize = parseInt(localStorage.getItem('docviewer_font_size') || '100', 10);
